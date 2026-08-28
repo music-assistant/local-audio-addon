@@ -390,11 +390,20 @@ refute_process() {
 # The stand-in Supervisor
 # ==============================================================================
 
-# Starts the stand-in on a port the OS picks, serving the options given.
+# Starts the stand-in on a port the OS picks, serving the options given as `key=value` pairs. The
+# stand-in leaves an empty value out, the way the Supervisor leaves out an option nobody set.
+#
+# Pairs rather than positional parameters so that a new option is one more argument at the call
+# site instead of a signature every caller has to be walked through in step.
 start_supervisor() {
-    local name=$1 output=$2 log_level=$3 server=$4
+    local pair
     local log="$WORK_DIR/supervisor.log"
     local waited=0
+    local -a options
+
+    for pair in "$@"; do
+        options+=(--option "$pair")
+    done
 
     stop_supervisor
     SUPERVISOR_MARKER="$WORK_DIR/supervisor-requests-${CHECKS}"
@@ -403,10 +412,7 @@ start_supervisor() {
     python3 "$FAKE_SUPERVISOR" \
         --token "$SUPERVISOR_TOKEN" \
         --marker "$SUPERVISOR_MARKER" \
-        --option "name=$name" \
-        --option "output=$output" \
-        --option "log_level=$log_level" \
-        --option "server=$server" \
+        ${options[@]+"${options[@]}"} \
         >"$log" 2>&1 &
     SUPERVISOR_PID=$!
 
@@ -473,6 +479,7 @@ retire_player() {
 # the list that dies with it.
 start_player() {
     local name='' output='' log_level='' server='' apparmor=''
+    local buffer_ms='' audio_format='' id=''
     local pair key value
     local -a args
 
@@ -484,6 +491,9 @@ start_player() {
             output) output=$value ;;
             log_level) log_level=$value ;;
             server) server=$value ;;
+            buffer_ms) buffer_ms=$value ;;
+            audio_format) audio_format=$value ;;
+            id) id=$value ;;
             apparmor) apparmor=$value ;;
             *) fail "start_player: unknown option '$key'" ;;
         esac
@@ -501,8 +511,12 @@ start_player() {
         args+=(--security-opt "apparmor=$apparmor")
     fi
 
+    # `audio_format` and `id` are served here too, though they are not add-on options: a check
+    # can then assert that the add-on does not take them even when a Supervisor offers them,
+    # which is a stronger statement about the split than never offering them would be.
     if [ "$MODE" = addon ]; then
-        start_supervisor "$name" "$output" "$log_level" "$server"
+        start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
+            "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" "id=$id"
         args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
         args+=(--env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
         args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
@@ -511,6 +525,9 @@ start_player() {
         if [ -n "$output" ]; then args+=(--env "SENDSPIN_OUTPUT=$output"); fi
         if [ -n "$log_level" ]; then args+=(--env "SENDSPIN_LOG_LEVEL=$log_level"); fi
         if [ -n "$server" ]; then args+=(--env "SENDSPIN_SERVER=$server"); fi
+        if [ -n "$buffer_ms" ]; then args+=(--env "SENDSPIN_BUFFER_MS=$buffer_ms"); fi
+        if [ -n "$audio_format" ]; then args+=(--env "SENDSPIN_AUDIO_FORMAT=$audio_format"); fi
+        if [ -n "$id" ]; then args+=(--env "SENDSPIN_ID=$id"); fi
     fi
 
     CONTAINERS+=("$PLAYER")
@@ -742,6 +759,25 @@ check_advertise_mode() {
     refute_config_line "$container" '^server' \
         'an unset server is left out of the config rather than written empty'
 
+    # The same rule as `server`, for the three keys whose default is upstream's own. A number or
+    # a shape written here would be this repo's to keep in step with upstream's for good, so the
+    # absence is the assertion that matters -- and it is asserted on the player nothing was
+    # configured on, which is the one every user who never opened the settings is running.
+    refute_config_line "$container" '^buffer-ms' \
+        'an unset buffer is left out, so the player keeps its own default'
+    refute_config_line "$container" '^audio-format' \
+        'an unset audio format is left out rather than pinning a shape nobody asked for'
+    refute_config_line "$container" '^id = ' \
+        'an unset client id is left out, so the player derives its own'
+
+    # Written on every start from neither deployment's configuration, so they are asserted on the
+    # unconfigured player: an image that only reported itself properly when configured would be
+    # reporting the library's identity to nearly everybody.
+    assert_config_line "$container" '^manufacturer = Music Assistant$' \
+        'the device list is told this image made the player, not the library it is built on'
+    assert_config_line "$container" '^product-name = Local Audio$' \
+        'and told what the product is'
+
     # Read with exec rather than through config_of above: the mode belongs to the container's own
     # copy, and `docker cp` writes a host file whose permissions are the runner's business.
     mode=$(docker exec "$container" stat -c %a /run/sendspin-cli/sendspin-cli.conf)
@@ -922,6 +958,76 @@ server = evil" 'output=null'
         'the log names the option it refused, and why'
     refute_log "$container" 'listening on port 8928' \
         'no player was started on the injected config'
+}
+
+# The one tuning value both deployments offer, so it is asserted in both. The range is the
+# player's own, and the refusal is the half that earns its keep: the add-on's schema holds a value
+# to that range before it ever arrives, and Compose has nothing at all in front of it, so the
+# shared read is the only place the two are held to the same standard.
+check_buffer_ms() {
+    local container case value message
+
+    step 'a configured audio buffer'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'buffer_ms=250'
+    container=$PLAYER
+    assert_log "$container" 'listening on port 8928' 'the player came up on its port'
+    assert_config_line "$container" '^buffer-ms = 250$' \
+        'the buffer reached the rendered config under the key the player reads'
+
+    # Refused here rather than passed on, because a value the player rejects is a container that
+    # restarts into the same rejection, reported in the player's words about a config file the
+    # user never wrote rather than in ours about the value they did set.
+    #
+    # One case per reason the guard has to refuse, because they are separate branches of it. The
+    # last is the one the length test exists for and the only case that would still pass without
+    # it: past 64 bits the shell's own arithmetic wraps, so 2^64 + 100 reads as an obedient 100.
+    for case in \
+        'abc|SENDSPIN_BUFFER_MS is "abc", which is not a whole number of milliseconds.' \
+        '9|SENDSPIN_BUFFER_MS is 9, outside the 10 to 2000 milliseconds the player accepts.' \
+        '2001|SENDSPIN_BUFFER_MS is 2001, outside the 10 to 2000 milliseconds the player accepts.' \
+        '18446744073709551716|SENDSPIN_BUFFER_MS is 18446744073709551716, outside the 10 to 2000 milliseconds the player accepts.'; do
+        value=${case%%|*}
+        message=${case#*|}
+
+        step "the audio buffer ${value}"
+        start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "buffer_ms=${value}"
+        container=$PLAYER
+
+        wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+            show_logs "$container"
+            fail "a buffer of ${value} left the container running"
+        }
+        assert_exit_code "$container" 1 "the container exits 1 on a buffer of ${value}"
+        assert_log "$container" "$message" 'the log names the value it refused, and why'
+        refute_log "$container" 'listening on port 8928' \
+            'no player was started on a buffer the player would have refused anyway'
+    done
+}
+
+# The two values Compose has and the add-on deliberately does not. Add-on mode is served both by
+# the stand-in Supervisor and has to ignore them, which says "not an option here" far more firmly
+# than never offering them would. The format is one a device-less sink advertises, so what is
+# under test is the plumbing rather than a player refusing a shape it could not honour.
+check_compose_only_options() {
+    local container
+
+    step 'the Compose-only options'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" \
+        'audio_format=flac:48000:24:2' 'id=smoke-test-player'
+    container=$PLAYER
+    assert_log "$container" 'listening on port 8928' 'the player came up on its port'
+
+    if [ "$MODE" = addon ]; then
+        refute_config_line "$container" '^audio-format' \
+            'an audio format is not an add-on option, even with a Supervisor serving one'
+        refute_config_line "$container" '^id = ' \
+            'nor is a client id, for the same reason'
+    else
+        assert_config_line "$container" '^audio-format = flac:48000:24:2$' \
+            'the audio format reached the rendered config under the key the player reads'
+        assert_config_line "$container" '^id = smoke-test-player$' \
+            'and so did the client id'
+    fi
 }
 
 # An output the host cannot open is the likeliest way for this image to be misconfigured, and the
@@ -1139,6 +1245,8 @@ main() {
     check_newline_in_an_option
     check_output_names_that_changed_meaning
     check_output_names_that_did_not
+    check_buffer_ms
+    check_compose_only_options
     check_crash_visibility
     check_confined_stop
     if [ "$MODE" = addon ]; then

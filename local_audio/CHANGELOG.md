@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.11
+
+- New **Audio buffer** setting, in milliseconds. Leave it empty and nothing
+  changes: the player uses its own default, which suits almost every system.
+  Raise it where the sound stutters or drops out on a busy or slow machine —
+  there is then more audio queued up to play through the gap — at the cost of a
+  longer wait when a track starts and when you seek. The Docker Compose
+  deployment of the same image has it as `SENDSPIN_BUFFER_MS`.
+- This player now names itself in Music Assistant's device list as **Music
+  Assistant** / **Local Audio**. It was listing the manufacturer and model of
+  the library it is built on, `sendspin-cpp-cli` and `sendspin-cli`. Nothing
+  else changes, and the name you gave the player is untouched.
+- Two more settings for that Compose deployment alone, covered in the
+  repository's `README.md`: `SENDSPIN_AUDIO_FORMAT` moves one audio format to
+  the front of the list the player advertises, which is how a DAC that is only
+  happy in one shape is held there, and `SENDSPIN_ID` gives each container its
+  own identity where more than one runs on a machine. Neither is offered here,
+  because neither has a problem to solve here: this app plays through Home
+  Assistant's own audio output, which converts, and it is one player per system.
+
 ## 0.1.10
 
 Built on `sendspin-cli` v0.1.5, and through it `sendspin-cpp` v0.7.2.
