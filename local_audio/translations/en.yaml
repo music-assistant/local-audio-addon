@@ -30,9 +30,10 @@ configuration:
       to switch on — an amplifier relay, a light. Whatever you put here is a
       shell command and is run as typed, inside this app, every time a stream
       starts; it does not hold up the audio, and a command that fails is a line
-      in the log rather than a player that stops. SENDSPIN_EVENT, and where the
-      server said so SENDSPIN_SERVER_NAME and SENDSPIN_CLIENT_NAME, are in its
-      environment.
+      in the log rather than a player that stops. It runs as root with everything
+      this app can reach, so put nothing here you would not run on this machine
+      yourself. What the stream was is in its environment — SENDSPIN_EVENT among
+      others, which the repository's README lists.
   hook_stop:
     name: Command to run when playback stops
     description: >-

@@ -63,12 +63,13 @@ SENDSPIN_HOOK_START: curl -fsS -X POST http://192.168.1.20/relay/0?turn=on
 SENDSPIN_HOOK_STOP: curl -fsS -X POST http://192.168.1.20/relay/0?turn=off
 ```
 
-The command runs with what the container has, which is `curl`, `jq` and the rest
-of a small Debian userland — not the host's tools, and not the host's network
-stack unless the container has `network_mode: host` as the shipped Compose file
-does. It does not hold up playback: the player starts it and carries on, and a
-command that exits non-zero is a warning in the log rather than a player that
-stops. Its output goes to the log too.
+The command runs with what the container has — `curl` and `jq` come with the Home
+Assistant base image this is built on, alongside a small Debian userland — not the
+host's tools, and not the host's network stack unless the container has
+`network_mode: host` as the shipped Compose file does. It does not hold up
+playback: the player starts it and carries on, and a command that exits non-zero
+is a warning in the log rather than a player that stops. Its output goes to the
+log too.
 
 What the event was arrives in the environment:
 
@@ -81,7 +82,11 @@ What the event was arrives in the environment:
 | `SENDSPIN_CLIENT_NAME` | always, as the player's name |
 
 Anything unknown for an event is unset rather than empty, so `[ -n "$SENDSPIN_SERVER_ID" ]`
-means what it looks like. The Home Assistant app offers the same two as
+means what it looks like. To read one of them inside a command written in
+`docker-compose.yml`, double the dollar — `$$SENDSPIN_EVENT`. A single `$` is
+expanded by `docker compose` itself before the container starts, so the hook is
+handed an empty string, and a command that quietly does nothing is a hard fault to
+track down. The Home Assistant app offers the same two as
 **Command to run when playback starts** and **…stops**, and its AppArmor profile
 had to be widened to let the player exec anything at all before they would work;
 the section on the app below covers what that grants.
@@ -272,9 +277,16 @@ Supervisor rewrites the top-level name to the installed slug before loading.
 What that costs, plainly: someone who takes this player over through the network
 can now start a shell, and through it run any program in the image. What it does
 not do is widen what any of them may touch — they all run under the same profile,
-holding no capability, able to open only the files it lists. The one file rule
-added alongside is `/tmp`, so that a hook has somewhere to write that is not the
-player's own state.
+holding no capability, able to open only the files it lists. No file rule was added
+alongside it: a hook writes where the player writes, or nowhere.
+
+The other route to that shell is the one the feature is for, and it is worth being
+equally plain about: anyone who can edit this app's options can run a command as
+root inside a container with `host_network: true` and Home Assistant's audio mapped
+in. That is not a privilege this change creates — someone with app-configuration
+access on a Home Assistant machine can already install a terminal app and do more
+than that — but it does mean the two fields deserve the same care as any other
+root shell on the box.
 
 The app plays through the PulseAudio that Home Assistant maps in, and the sound
 card is chosen in the app's own Audio panel — it offers no output option of its

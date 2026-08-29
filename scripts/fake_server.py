@@ -19,10 +19,11 @@ No audio follows the stream/start and none is needed: the stream lifecycle callb
 the message rather than on the first chunk. `client/time` is answered because the player asks
 until it is; everything else it sends is read and dropped.
 
-Out of scope of the RFC 6455 handling below, because nothing here produces any of it: frame
-fragmentation and continuation frames, extensions, and close negotiation. A frame this does
-not understand is skipped rather than reassembled -- reassembling would be implementing a
-protocol this file is trying not to have.
+Out of scope of the RFC 6455 handling below, because nothing on this connection produces any
+of it: frame fragmentation and continuation frames, extensions, close negotiation, and
+payloads past 64 KiB in either direction. A binary frame is read and dropped; a fragmented
+text one would be handed to the JSON parser in pieces and end the connection, which is the
+honest failure for a file that is trying not to be a second protocol implementation.
 
 Every connection is recorded in --marker, one outcome per line, and the smoke suite asserts
 what it finds there: a check whose player never connected would otherwise assert the absence
@@ -39,7 +40,6 @@ import json
 import select
 import socketserver
 import struct
-import threading
 import time
 
 # RFC 6455's handshake constant. The accept key is the client's key concatenated with this,
@@ -64,6 +64,15 @@ STREAM_FORMAT = {"codec": "pcm", "sample_rate": 44100, "bit_depth": 16, "channel
 POLL_S = 0.2
 FRAME_TIMEOUT_S = 5
 
+# The largest frame this will read, and the largest it can write -- the two-byte length field is
+# the widest it encodes. The longest thing it sends is a server/hello of a couple of hundred
+# bytes, and the longest the player sends is a client/hello of a few thousand.
+MAX_FRAME_BYTES = 65535
+
+# How long a stream runs before stream/end, in milliseconds. Long enough that the start hook has
+# certainly run by the time the stop hook is asked for, short enough not to pad every check.
+STREAM_MS = 1000
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -75,12 +84,6 @@ def parse_args():
         type=int,
         default=0,
         help="port to listen on; 0 lets the OS choose a free one",
-    )
-    parser.add_argument(
-        "--stream-ms",
-        type=int,
-        default=1000,
-        help="how long the stream runs before stream/end, in milliseconds",
     )
     return parser.parse_args()
 
@@ -117,6 +120,12 @@ def receive_frame(connection):
             return None
         length = struct.unpack("!H" if width == 2 else "!Q", extended)[0]
 
+    # Capped for the reason the handshake read is: this binds 0.0.0.0, and a declared length is
+    # a number anything that connects can choose. Nothing the player sends comes near it.
+    if length > MAX_FRAME_BYTES:
+        log(f"refusing a frame declaring {length} bytes")
+        return None
+
     mask = b""
     if masked:
         mask = receive_exactly(connection, 4)
@@ -134,8 +143,7 @@ def receive_frame(connection):
 def send_frame(connection, opcode, payload):
     """One unmasked frame. A server never masks, which is the whole of the difference.
 
-    The two-byte length is the largest this writes. The longest thing it sends is a
-    server/hello of a couple of hundred bytes, so the 64-bit form has nothing to carry.
+    The two-byte length is the widest this encodes, which is MAX_FRAME_BYTES above.
     """
     header = bytearray([0x80 | opcode])
     length = len(payload)
@@ -277,16 +285,15 @@ class Handler(socketserver.BaseRequestHandler):
                     {"type": "stream/start", "payload": {"player": STREAM_FORMAT}},
                 )
                 self.record("stream-start")
-                ends_at = time.monotonic() + self.server.stream_ms / 1000
+                ends_at = time.monotonic() + STREAM_MS / 1000
 
 
 class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
     allow_reuse_address = True
-    # Named so the two are not read off a global by the handler, which is instantiated per
-    # connection and has the server to hand.
+    # Named so the handler, which is instantiated per connection, reads it off the server it
+    # already has rather than off a global.
     marker = None
-    stream_ms = 0
 
 
 def main():
@@ -296,14 +303,11 @@ def main():
     # reachable from a container, whose host-gateway address is not the loopback one.
     server = Server(("0.0.0.0", args.port), Handler)
     server.marker = args.marker
-    server.stream_ms = args.stream_ms
 
     # Printed rather than assumed, because --port 0 means the caller does not know it yet.
     log(f"listening on port {server.server_address[1]}")
 
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    thread.join()
+    server.serve_forever()
 
 
 if __name__ == "__main__":

@@ -249,13 +249,12 @@ profile local_audio flags=(attach_disconnected,mediate_deleted) {
     # /usr/sbin is deliberately not here beside it. Everything in it is system
     # administration -- useradd, chroot, the filesystem and swap tools -- so it
     # is a set no hook has a use for and the one set worth not handing to
-    # somebody who has reached this far.
+    # somebody who has reached this far. That holds only while /usr/sbin is a
+    # directory of its own, which it is on the Debian this image is built on and
+    # will not be once Debian's sbin-merge lands: after that every path in it
+    # resolves under /usr/bin and this rule swallows the lot. The confined check
+    # in scripts/smoke_test.sh asserts a hook cannot run out of /usr/sbin, so
+    # that day is a red test rather than a quiet widening.
     /usr/bin/** ix,
-
-    # Somewhere for a hook to keep a scratch file, which is otherwise the one
-    # ordinary thing it could not do: everything this profile may write is the
-    # player's own. Container-local, and already granted to every other process
-    # in this container by the profile above.
-    /tmp/** rw,
   }
 }

@@ -225,6 +225,7 @@ stop_server() {
     fi
     SERVER_PID=''
     SERVER_PORT=''
+    SERVER_MARKER=''
 }
 
 cleanup() {
@@ -537,6 +538,7 @@ assert_server_reached() {
     local outcome=$1 what=$2
     local waited=0
 
+    [ -n "$SERVER_MARKER" ] || fail "$what -- no stand-in server was started for this check"
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
         if grep -F -x -e "$outcome" "$SERVER_MARKER" >/dev/null 2>&1; then
             pass "$what"
@@ -606,9 +608,10 @@ start_player() {
     PLAYER="${RUN_PREFIX}-player-${CHECKS}"
     args=(--detach --name "$PLAYER")
 
-    # `stream=yes` asks for a player a stream will actually run on, which is a stand-in server
-    # to dial out to. It is spelled as a want rather than as a server value for the same reason
-    # every other pair here is: the check says what it needs, not how it is wired up.
+    # Any non-empty `stream=` asks for a player a stream will actually run on, which is a
+    # stand-in server to dial out to. It is spelled as a want rather than as a server value for
+    # the same reason every other pair here is: the check says what it needs, not how it is
+    # wired up. Presence rather than value, as `apparmor=` beside it also is.
     if [ -n "$stream" ]; then
         [ -z "$server" ] || fail 'start_player: stream= and server= both name a server'
         start_server
@@ -1050,30 +1053,42 @@ check_credentials_are_kept_out_of_the_mode_line() {
         'the credentials still reach the player, which needs them'
 }
 
-# The one option value that could rewrite the configuration rather than fill it in: a newline
-# turns one option into two config keys, and an injected `server` flips the connection mode and
-# takes the advertisement with it without saying so. Refused rather than escaped, and the refusal
-# has to stop the container -- a player started on a config somebody else wrote is worse than one
+# An option value that would rewrite the configuration rather than fill it in: a newline turns
+# one option into two config keys, and an injected `server` flips the connection mode and takes
+# the advertisement with it without saying so. Refused rather than escaped, and the refusal has
+# to stop the container -- a player started on a config somebody else wrote is worse than one
 # that never started at all.
+#
+# One case per option that reaches the guard by a different route: `name` is read straight from
+# the option source, and `hook_start` is the one whose value is a command in the first place --
+# which makes it the option most likely to be written by hand around a quoted string, and the
+# one where a reader might reasonably think the guard was doing more than it is. It is not: it
+# refuses the newline, and says nothing about what the command itself may do.
 check_newline_in_an_option() {
-    local container
-    step 'a newline in an option value'
-    start_player "name=x
+    local container case option variable
+
+    for case in 'name|SENDSPIN_NAME' 'hook_start|SENDSPIN_HOOK_START'; do
+        option=${case%%|*}
+        variable=${case#*|}
+
+        step "a newline in the ${option} option"
+        start_player "${option}=x
 server = evil" 'output=null'
-    container=$PLAYER
+        container=$PLAYER
 
-    wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
-        show_logs "$container"
-        fail 'an option carrying a newline left the container running'
-    }
-    pass 'an option carrying a newline stops the container'
+        wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+            show_logs "$container"
+            fail "a ${option} carrying a newline left the container running"
+        }
+        pass "an option carrying a newline stops the container"
 
-    assert_exit_code "$container" 1 'the container exits 1 on a refused option'
-    assert_log "$container" \
-        'SENDSPIN_NAME contains a newline, which would inject configuration keys.' \
-        'the log names the option it refused, and why'
-    refute_log "$container" 'listening on port 8928' \
-        'no player was started on the injected config'
+        assert_exit_code "$container" 1 'the container exits 1 on a refused option'
+        assert_log "$container" \
+            "${variable} contains a newline, which would inject configuration keys." \
+            'the log names the option it refused, and why'
+        refute_log "$container" 'listening on port 8928' \
+            'no player was started on the injected config'
+    done
 }
 
 # The one tuning value both deployments offer, so it is asserted in both. The range is the
@@ -1378,8 +1393,31 @@ check_confined_stream_hooks() {
     # [113] exited 127`, with a pid in the middle of it, so a match written around the word
     # `hook` would be an assertion that can never fail.
     refute_log "$container" 'exited 127' \
-        'no hook was refused its exec, so nothing was denied and quietly retried'
+        'neither hook was refused its exec'
 
+    # The other half of the grant, and the half that is a claim rather than a permission: the
+    # profile grants /usr/bin and deliberately not /usr/sbin, so a hook must not be able to run
+    # anything out of the latter. 126 rather than 127 because it is the *shell* reporting a
+    # command it could not execute, where 127 above was the player reporting a shell it could
+    # not execute.
+    #
+    # This is what turns that exclusion from a comment into something the suite defends. It
+    # holds while /usr/sbin is a directory of its own; the day Debian's sbin-merge folds it into
+    # /usr/bin, `/usr/bin/** ix` covers it, nologin runs, and this goes red -- which is the
+    # point of asserting it rather than trusting the layout.
+    step 'a stream hook reaching into /usr/sbin, under the profile'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' \
+        'hook_start=/usr/sbin/nologin' "apparmor=$APPARMOR_SLUG"
+    container=$PLAYER
+
+    assert_server_reached 'stream-start' 'the confined player connected and was streamed to'
+    assert_log "$container" 'exited 126' \
+        'a hook cannot run out of /usr/sbin, which the profile grants no exec of'
+
+    # Before the profile leaves the kernel, which is the rule this file states at the top of the
+    # AppArmor section: a container still running under a profile keeps it loaded, and the next
+    # run would confine against whatever this one left behind.
+    retire_player
     unload_apparmor_profile
 }
 
