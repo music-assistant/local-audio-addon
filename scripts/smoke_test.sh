@@ -11,10 +11,11 @@
 # the API bashio reads, which is what the add-on does. Every check below is written once and both
 # modes deliver to it, so the two paths cannot end up held to different standards.
 #
-# Needs: docker, and python3 for the stand-in Supervisor in add-on mode. One check confines a
-# container with the add-on's own AppArmor profile, and needs a kernel that enforces one plus
-# apparmor_parser and the privilege to load it; without those it says so and is skipped, unless
-# --require-apparmor is given, which makes that a failure instead.
+# Needs: docker, and python3 for the two stand-ins it runs on the host -- a Supervisor in add-on
+# mode, and a Music Assistant server for the checks that need a stream to have happened. Two
+# checks confine a container with the add-on's own AppArmor profile, and need a kernel that
+# enforces one plus apparmor_parser and the privilege to load it; without those they say so and
+# are skipped, unless --require-apparmor is given, which makes that a failure instead.
 #
 # Usage: scripts/smoke_test.sh <image-ref> [--mode standalone|addon] [--require-apparmor]
 
@@ -78,6 +79,7 @@ readonly MODE IMAGE REQUIRE_APPARMOR
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 readonly SCRIPT_DIR
 readonly FAKE_SUPERVISOR="$SCRIPT_DIR/fake_supervisor.py"
+readonly FAKE_SERVER="$SCRIPT_DIR/fake_server.py"
 
 # The add-on's own AppArmor profile. The name it is loaded under is APPARMOR_SLUG, below.
 readonly APPARMOR_SOURCE="$SCRIPT_DIR/../local_audio/apparmor.txt"
@@ -98,6 +100,23 @@ readonly CREDENTIAL=s3cr3t
 # add-on branch off, and what the stand-in refuses a request without -- so a token the container
 # failed to forward fails the run rather than passing unnoticed.
 readonly SUPERVISOR_TOKEN=smoke-supervisor-token
+
+# What the stream-hook checks ask a hook to print, and it is written the way it is on purpose.
+#
+# `%s` rather than the word, so that the line asserted below can only have come from a hook
+# that ran: the player logs the command itself at debug level, and a hook echoing a fixed
+# string would be matched by that log line whether or not the exec ever happened.
+#
+# /usr/bin/printf rather than printf, because printf is one of dash's builtins -- so the bare
+# name would prove the shell started and nothing about whether the shell can run a program.
+# The absolute path is a second exec, from inside the hook, which is what an amplifier relay's
+# `curl` needs and what the profile's second rule grants.
+# shellcheck disable=SC2016  # $SENDSPIN_EVENT is for the hook's shell, not for this one.
+readonly HOOK_COMMAND='/usr/bin/printf "the %s hook ran\n" "$SENDSPIN_EVENT"'
+
+# The alias a player reaches the stand-in server on, resolved to the host with --add-host. The
+# stand-in binds a port the OS picks, which lands in SERVER_PORT when it starts.
+readonly SERVER_HOST=sendspin-server
 
 # `supervisor` is the host the real Supervisor answers on, and the one bashio's default URL
 # names. Only the port is test-specific -- the stand-in cannot have 80 on the runner -- so
@@ -157,6 +176,9 @@ APPARMOR_UNAVAILABLE=''
 SUPERVISOR_PID=''
 SUPERVISOR_PORT=''
 SUPERVISOR_MARKER=''
+SERVER_PID=''
+SERVER_PORT=''
+SERVER_MARKER=''
 CHECKS=0
 
 fail() {
@@ -196,9 +218,19 @@ stop_supervisor() {
     SUPERVISOR_PORT=''
 }
 
+stop_server() {
+    if [ -n "$SERVER_PID" ]; then
+        kill "$SERVER_PID" 2>/dev/null || true
+        wait "$SERVER_PID" 2>/dev/null || true
+    fi
+    SERVER_PID=''
+    SERVER_PORT=''
+}
+
 cleanup() {
     local container
     stop_supervisor
+    stop_server
     for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
         docker rm --force --volumes "$container" >/dev/null 2>&1 || true
     done
@@ -249,6 +281,11 @@ show_logs() {
         printf -- '---- stand-in Supervisor ----\n' >&2
         cat "$WORK_DIR/supervisor.log" >&2
         printf -- '---- end stand-in Supervisor ----\n' >&2
+    fi
+    if [ -n "$SERVER_PID" ]; then
+        printf -- '---- stand-in server ----\n' >&2
+        cat "$WORK_DIR/server.log" >&2
+        printf -- '---- end stand-in server ----\n' >&2
     fi
 }
 
@@ -454,17 +491,79 @@ assert_supervisor_requests() {
 }
 
 # ==============================================================================
+# The stand-in Music Assistant server
+# ==============================================================================
+#
+# Only the stream-hook checks need one. Every other check here is about a player that has been
+# started and configured, which needs no server at all -- and the two connection-mode checks
+# deliberately aim at an address nothing answers on.
+
+# Starts the stand-in on a port the OS picks and leaves it in SERVER_PORT. The player is pointed
+# at it by `server=$SERVER_HOST:$SERVER_PORT`, which start_player turns into an --add-host.
+start_server() {
+    local log="$WORK_DIR/server.log"
+    local waited=0
+
+    stop_server
+    SERVER_MARKER="$WORK_DIR/server-connections-${CHECKS}"
+    : >"$log"
+
+    python3 "$FAKE_SERVER" --marker "$SERVER_MARKER" >"$log" 2>&1 &
+    SERVER_PID=$!
+
+    while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
+        if grep -F -e 'listening on port ' "$log" >/dev/null 2>&1; then
+            SERVER_PORT=$(sed -n 's/.*listening on port \([0-9]*\).*/\1/p' "$log" | head -1)
+            [ -n "$SERVER_PORT" ] || fail 'the stand-in server printed no port'
+            return 0
+        fi
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            cat "$log" >&2
+            fail 'the stand-in server died before it was listening'
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+
+    cat "$log" >&2
+    fail 'the stand-in server never reported a port'
+}
+
+# That the stand-in got as far as `outcome` with the player under test. Without this, a check
+# asserting a hook's output would report the player's failure to connect as a missing hook, and
+# one asserting a hook's *absence* would pass having never streamed anything.
+assert_server_reached() {
+    local outcome=$1 what=$2
+    local waited=0
+
+    while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
+        if grep -F -x -e "$outcome" "$SERVER_MARKER" >/dev/null 2>&1; then
+            pass "$what"
+            return 0
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+
+    printf '\n---- stand-in server ----\n' >&2
+    cat "$WORK_DIR/server.log" >&2
+    printf -- '---- end stand-in server ----\n' >&2
+    fail "$what -- the stand-in server never recorded '$outcome'"
+}
+
+# ==============================================================================
 # Starting a player
 # ==============================================================================
 
-# Removes the player, and stops the stand-in Supervisor, of the check before this one. The checks
-# run strictly in sequence and never want two players at once.
+# Removes the player, and stops the stand-ins, of the check before this one. The checks run
+# strictly in sequence and never want two players at once.
 retire_player() {
     if [ -n "$PLAYER" ]; then
         docker rm --force --volumes "$PLAYER" >/dev/null 2>&1 || true
     fi
     PLAYER=''
     stop_supervisor
+    stop_server
 }
 
 # Starts a player with the given options and leaves its container name in $PLAYER. Options are
@@ -478,8 +577,8 @@ retire_player() {
 # all of this in a subshell, where the container it started is tracked for cleanup in a copy of
 # the list that dies with it.
 start_player() {
-    local name='' output='' log_level='' server='' apparmor=''
-    local buffer_ms='' audio_format='' id=''
+    local name='' output='' log_level='' server='' apparmor='' stream=''
+    local buffer_ms='' audio_format='' id='' hook_start='' hook_stop=''
     local pair key value
     local -a args
 
@@ -494,6 +593,9 @@ start_player() {
             buffer_ms) buffer_ms=$value ;;
             audio_format) audio_format=$value ;;
             id) id=$value ;;
+            hook_start) hook_start=$value ;;
+            hook_stop) hook_stop=$value ;;
+            stream) stream=$value ;;
             apparmor) apparmor=$value ;;
             *) fail "start_player: unknown option '$key'" ;;
         esac
@@ -502,6 +604,16 @@ start_player() {
     retire_player
     PLAYER="${RUN_PREFIX}-player-${CHECKS}"
     args=(--detach --name "$PLAYER")
+
+    # `stream=yes` asks for a player a stream will actually run on, which is a stand-in server
+    # to dial out to. It is spelled as a want rather than as a server value for the same reason
+    # every other pair here is: the check says what it needs, not how it is wired up.
+    if [ -n "$stream" ]; then
+        [ -z "$server" ] || fail 'start_player: stream= and server= both name a server'
+        start_server
+        server="${SERVER_HOST}:${SERVER_PORT}"
+        args+=(--add-host "${SERVER_HOST}:host-gateway")
+    fi
 
     # The one argument here that is not a player option: it is a `docker run` flag, and it is
     # delivered the same way in both modes because it has nothing to do with where the options
@@ -516,7 +628,8 @@ start_player() {
     # which is a stronger statement about the split than never offering them would be.
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
-            "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" "id=$id"
+            "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" "id=$id" \
+            "hook_start=$hook_start" "hook_stop=$hook_stop"
         args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
         args+=(--env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
         args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
@@ -528,6 +641,8 @@ start_player() {
         if [ -n "$buffer_ms" ]; then args+=(--env "SENDSPIN_BUFFER_MS=$buffer_ms"); fi
         if [ -n "$audio_format" ]; then args+=(--env "SENDSPIN_AUDIO_FORMAT=$audio_format"); fi
         if [ -n "$id" ]; then args+=(--env "SENDSPIN_ID=$id"); fi
+        if [ -n "$hook_start" ]; then args+=(--env "SENDSPIN_HOOK_START=$hook_start"); fi
+        if [ -n "$hook_stop" ]; then args+=(--env "SENDSPIN_HOOK_STOP=$hook_stop"); fi
     fi
 
     CONTAINERS+=("$PLAYER")
@@ -1176,6 +1291,97 @@ check_confined_stop() {
     unload_apparmor_profile
 }
 
+# The two options that are a command rather than data. Both halves are asserted: that an unset
+# hook is absent from the rendered config -- a `hook-start =` with nothing after it is still a
+# command the player would try to run -- and that a set one arrives under the key the player
+# reads and is then really run when a stream starts and ends.
+#
+# Running one needs a stream, and a stream needs a server, which is what scripts/fake_server.py
+# is. Nothing else in this suite has ever needed one: every other check is about a player that
+# has been configured and started, and the two connection-mode checks deliberately aim at an
+# address nothing answers on.
+check_stream_hooks() {
+    local container
+
+    step 'no stream hooks configured'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL"
+    container=$PLAYER
+    assert_log "$container" 'listening on port 8928' 'the player came up on its port'
+    refute_config_line "$container" '^hook-start' \
+        'an unset start hook is absent from the rendered config rather than empty'
+    refute_config_line "$container" '^hook-stop' \
+        'and so is an unset stop hook'
+
+    step 'the stream hooks'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' \
+        "hook_start=$HOOK_COMMAND" "hook_stop=$HOOK_COMMAND"
+    container=$PLAYER
+
+    # Logged after the config is written and before the player is exec'd, so it is what makes
+    # the two reads below race-free rather than a guess at how far the start has got.
+    assert_log "$container" 'Dialling out to' \
+        'the player was started, so its config has been rendered'
+    assert_config_line "$container" '^hook-start = ' \
+        'the start hook reached the rendered config under the key the player reads'
+    assert_config_line "$container" '^hook-stop = ' \
+        'and so did the stop hook'
+
+    assert_server_reached 'stream-start' 'the stand-in server started a stream on the player'
+    assert_log "$container" 'the start hook ran' \
+        'the start hook was run, and its output reached the log'
+    assert_server_reached 'stream-end' 'the stand-in server ended the stream'
+    assert_log "$container" 'the stop hook ran' \
+        'the stop hook was run when the stream ended'
+}
+
+# The same thing under the profile the Supervisor installs, and the check this whole change
+# turns on. Running a hook is the only exec the player's child profile has, and an AppArmor
+# denial of it is invisible everywhere else: the container starts, the config renders, the
+# player streams, and the only symptom is a hook that silently does not run. The unconfined
+# check above cannot see it, because the rules it depends on are not in force there.
+#
+# That profile permitted no exec of anything before this change, so deleting its one
+# `/usr/bin/** ix` line from local_audio/apparmor.txt is what proves this check tests the grant
+# rather than passing regardless: the player then reports the hook as having exited 127, its
+# own account of an execve() that failed, and the assertions below go red. The hook runs
+# /usr/bin/printf rather than the shell builtin of the same name so that the same one line is
+# load-bearing twice over -- for the shell the player execs, and for the program the shell
+# execs after it, which is what an amplifier relay's `curl` would be.
+check_confined_stream_hooks() {
+    local container
+    step 'running a stream hook under the add-on AppArmor profile'
+
+    if ! apparmor_available; then
+        skip "$APPARMOR_UNAVAILABLE, so the confined hook ran nowhere -- the installed add-on is confined on every start, and the hook exec is the one thing its profile has to permit"
+        return
+    fi
+
+    load_apparmor_profile
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' \
+        "hook_start=$HOOK_COMMAND" "hook_stop=$HOOK_COMMAND" "apparmor=$APPARMOR_SLUG"
+    container=$PLAYER
+
+    assert_server_reached 'stream-start' 'the confined player connected and was streamed to'
+    assert_log "$container" 'the start hook ran' \
+        'the profile lets the player execute the hook shell'
+    assert_server_reached 'stream-end' 'the stand-in server ended the stream'
+    assert_log "$container" 'the stop hook ran' \
+        'and the stop hook runs under it too'
+
+    # 127 is what the player reports for a hook whose execve() failed, which is what an
+    # AppArmor denial of the exec looks like from inside the container -- there is no other
+    # symptom, and the denial itself is only in the host's kernel log. Refuted after the
+    # assertions above, so the absence means the exec succeeded rather than not-yet.
+    #
+    # Just the exit code and not the whole sentence: the player's line is `The start hook
+    # [113] exited 127`, with a pid in the middle of it, so a match written around the word
+    # `hook` would be an assertion that can never fail.
+    refute_log "$container" 'exited 127' \
+        'no hook was refused its exec, so nothing was denied and quietly retried'
+
+    unload_apparmor_profile
+}
+
 # That the options the checks above asserted really did come over the API, authenticated. Without
 # this, add-on mode would still pass on an image that ignored the Supervisor entirely and fell
 # through to its defaults -- `null` is not one of those defaults, but a check that never looks at
@@ -1229,10 +1435,15 @@ main() {
     docker image inspect "$IMAGE" >/dev/null 2>&1 ||
         fail "no such image '$IMAGE' -- build it first, or pass one that exists"
 
+    # The stand-in server runs in both modes -- a stream is not something either option source
+    # changes -- so python3 is needed in both, and is checked here rather than inside the
+    # add-on branch below where it used to be the stand-in Supervisor's requirement alone.
+    [ -f "$FAKE_SERVER" ] || fail "no stand-in server at '$FAKE_SERVER'"
+    command -v python3 >/dev/null ||
+        fail 'the stream-hook checks need python3 for the stand-in Music Assistant server'
+
     if [ "$MODE" = addon ]; then
         [ -f "$FAKE_SUPERVISOR" ] || fail "no stand-in Supervisor at '$FAKE_SUPERVISOR'"
-        command -v python3 >/dev/null ||
-            fail 'add-on mode needs python3 for the stand-in Supervisor'
     fi
 
     printf 'smoke: testing %s in %s mode\n' "$IMAGE" "$MODE"
@@ -1248,7 +1459,9 @@ main() {
     check_buffer_ms
     check_compose_only_options
     check_crash_visibility
+    check_stream_hooks
     check_confined_stop
+    check_confined_stream_hooks
     if [ "$MODE" = addon ]; then
         check_supervisor_was_asked
         check_supervisor_unreachable

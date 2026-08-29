@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.12
+
+- Two new settings, **Command to run when playback starts** and **Command to run
+  when playback stops**, for switching something on while the music plays — an
+  amplifier relay, a light. Each is a shell command, run inside this add-on every
+  time a stream starts or ends. It does not hold up the audio, and a command that
+  fails is a line in the log rather than a player that stops; `SENDSPIN_EVENT`
+  says which of the two events it is. Leave them empty and nothing runs, which is
+  what almost every system wants. The Docker Compose deployment of the same image
+  has them as `SENDSPIN_HOOK_START` and `SENDSPIN_HOOK_STOP`.
+- Those two settings run a command, so this add-on's AppArmor profile now lets
+  the player start a shell and run the programs in this add-on with it, which it
+  previously could not do at all. Worth saying plainly, because it is the first
+  thing that profile has ever permitted the player to execute: somebody who took
+  the player over through the network could now reach a shell, where before
+  there was nothing to reach. What it does not do is let anything reach further
+  than the player already could — the shell and everything it starts run under
+  the player's own profile, hold no capability, and can open only the files that
+  profile lists. Leaving both settings empty does not close it: the profile is
+  the same either way.
+
 ## 0.1.11
 
 - New **Audio buffer** setting, in milliseconds. Leave it empty and nothing

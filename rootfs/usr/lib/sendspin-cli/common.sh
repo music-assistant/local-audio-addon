@@ -18,9 +18,9 @@ sendspin::log() {
 }
 
 # Populate SENDSPIN_NAME, SENDSPIN_OUTPUT, SENDSPIN_LOG_LEVEL, SENDSPIN_SERVER,
-# SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT and SENDSPIN_ID. Only the source
-# differs between an add-on and a plain container; the defaults below are
-# applied to both so the two cannot drift.
+# SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT, SENDSPIN_ID, SENDSPIN_HOOK_START and
+# SENDSPIN_HOOK_STOP. Only the source differs between an add-on and a plain
+# container; the defaults below are applied to both so the two cannot drift.
 #
 # Stops the container on a value that would inject configuration keys, and on a
 # buffer the player would reject, rather than returning either to the caller.
@@ -46,6 +46,8 @@ sendspin::read_options() {
         SENDSPIN_LOG_LEVEL=$(sendspin::option "${config}" 'log_level')
         SENDSPIN_SERVER=$(sendspin::option "${config}" 'server')
         SENDSPIN_BUFFER_MS=$(sendspin::option "${config}" 'buffer_ms')
+        SENDSPIN_HOOK_START=$(sendspin::option "${config}" 'hook_start')
+        SENDSPIN_HOOK_STOP=$(sendspin::option "${config}" 'hook_stop')
     fi
 
     # A fixed name rather than the host's: `homeassistant` said nothing about
@@ -70,10 +72,21 @@ sendspin::read_options() {
     SENDSPIN_AUDIO_FORMAT="${SENDSPIN_AUDIO_FORMAT:-}"
     SENDSPIN_ID="${SENDSPIN_ID:-}"
 
+    # Empty rather than defaulted for the same reason as the two above: an unset
+    # hook has to be absent from the rendered config, because a `hook-start =`
+    # with nothing after it is still a command the player would run.
+    SENDSPIN_HOOK_START="${SENDSPIN_HOOK_START:-}"
+    SENDSPIN_HOOK_STOP="${SENDSPIN_HOOK_STOP:-}"
+
     # A newline in a value would add config keys of the caller's choosing, and
     # an injected `server` turns the mDNS advertisement off without saying so.
+    #
+    # The two hooks are in here for that reason and that reason only. Their
+    # values are shell commands by design, so there is nothing to sanitise
+    # within a line: whoever may set an option may already run what they like.
     for name in SENDSPIN_NAME SENDSPIN_OUTPUT SENDSPIN_LOG_LEVEL SENDSPIN_SERVER \
-        SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ID; do
+        SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ID \
+        SENDSPIN_HOOK_START SENDSPIN_HOOK_STOP; do
         value="${!name}"
         if [ "${value}" != "${value%%$'\n'*}" ]; then
             sendspin::log "${name} contains a newline, which would inject configuration keys."
