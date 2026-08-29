@@ -54,6 +54,26 @@ services:
       # PULSE_COOKIE: /root/.config/pulse/cookie
       # PIPEWIRE_REMOTE: /run/pipewire-0
       # SENDSPIN_LOG_LEVEL: info
+      # How much audio the output keeps buffered, 10 to 2000 milliseconds. Left
+      # unset the player picks its own figure; raise it where the sound breaks
+      # up on a busy or slow machine, at the cost of a longer wait when a track
+      # starts or is seeked. Anything that is not a whole number in that range
+      # stops the container with a line naming it -- with the restart policy
+      # above, one that keeps retrying -- rather than reaching the player.
+      # SENDSPIN_BUFFER_MS: 250
+      # Move one format to the front of the list this player advertises, as
+      # <codec>:<rate>:<depth>:<channels> -- for the DAC that is only happy in
+      # one shape. A format the output cannot advertise stops the player from
+      # starting rather than quietly playing something else -- with the restart
+      # policy above, a container looping on the same refusal -- so set it only
+      # against a device whose capabilities `sendspin-cli -l` has confirmed.
+      # SENDSPIN_AUDIO_FORMAT: flac:48000:24:2
+      # This player's stable identity, which a server files volume, group
+      # membership and pairing under. Left unset it is derived from the network
+      # interface MAC, so two containers on one host would share it and each
+      # server-side setting would land on whichever connected last. Give each
+      # its own only when running more than one on the same machine.
+      # SENDSPIN_ID: living-room-left
       # Dial out to one specific server instead of waiting to be discovered.
       # Any value here suppresses the mDNS advertisement.
       # SENDSPIN_SERVER: 192.168.1.10:8927

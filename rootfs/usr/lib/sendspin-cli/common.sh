@@ -17,9 +17,13 @@ sendspin::log() {
     printf '%s\n' "$*" >&2
 }
 
-# Populate SENDSPIN_NAME, SENDSPIN_OUTPUT, SENDSPIN_LOG_LEVEL and
-# SENDSPIN_SERVER. Only the source differs between an add-on and a plain
-# container; the defaults below are applied to both so the two cannot drift.
+# Populate SENDSPIN_NAME, SENDSPIN_OUTPUT, SENDSPIN_LOG_LEVEL, SENDSPIN_SERVER,
+# SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT and SENDSPIN_ID. Only the source
+# differs between an add-on and a plain container; the defaults below are
+# applied to both so the two cannot drift.
+#
+# Stops the container on a value that would inject configuration keys, and on a
+# buffer the player would reject, rather than returning either to the caller.
 sendspin::read_options() {
     local config name value
 
@@ -41,6 +45,7 @@ sendspin::read_options() {
         SENDSPIN_OUTPUT=$(sendspin::option "${config}" 'output')
         SENDSPIN_LOG_LEVEL=$(sendspin::option "${config}" 'log_level')
         SENDSPIN_SERVER=$(sendspin::option "${config}" 'server')
+        SENDSPIN_BUFFER_MS=$(sendspin::option "${config}" 'buffer_ms')
     fi
 
     # A fixed name rather than the host's: `homeassistant` said nothing about
@@ -50,15 +55,58 @@ sendspin::read_options() {
     : "${SENDSPIN_LOG_LEVEL:=info}"
     SENDSPIN_SERVER="${SENDSPIN_SERVER:-}"
 
+    # Left empty rather than given a default, because the run script writes only
+    # the keys that have a value: an unset one is then absent from the rendered
+    # config and upstream's own default stands. A number written here would be
+    # this repo's to keep in step with upstream's for good.
+    SENDSPIN_BUFFER_MS="${SENDSPIN_BUFFER_MS:-}"
+
+    # Read from the environment in both branches because neither is an add-on
+    # option. A pinned `audio-format` the output cannot advertise refuses to
+    # start the player, and the add-on plays through Home Assistant's
+    # PulseAudio, which converts -- there is no DAC behind it to hold at one
+    # shape. `id` only needs saying when two players share a host, which one
+    # add-on per system never does.
+    SENDSPIN_AUDIO_FORMAT="${SENDSPIN_AUDIO_FORMAT:-}"
+    SENDSPIN_ID="${SENDSPIN_ID:-}"
+
     # A newline in a value would add config keys of the caller's choosing, and
     # an injected `server` turns the mDNS advertisement off without saying so.
-    for name in SENDSPIN_NAME SENDSPIN_OUTPUT SENDSPIN_LOG_LEVEL SENDSPIN_SERVER; do
+    for name in SENDSPIN_NAME SENDSPIN_OUTPUT SENDSPIN_LOG_LEVEL SENDSPIN_SERVER \
+        SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ID; do
         value="${!name}"
         if [ "${value}" != "${value%%$'\n'*}" ]; then
             sendspin::log "${name} contains a newline, which would inject configuration keys."
             exit 1
         fi
     done
+
+    # The same range as the add-on's `buffer_ms` schema in local_audio/config.yaml,
+    # which both have to be moved together. That schema refuses a bad value before
+    # it can reach here at all, so this is Compose's copy of a check the add-on
+    # already has -- and it is why the message names the environment variable:
+    # everyone who ever sees it really did set one. Left unchecked, the value
+    # renders into the config and comes back as an upstream parse error on a
+    # container that restarts into the same one.
+    #
+    # More than four digits is out of range whatever it reads, and is rejected
+    # before the arithmetic rather than by it: `[ -gt ]` on a value past 64 bits
+    # wraps silently, so 2^64 + 100 would otherwise be accepted as 100. `10#`
+    # for the neighbouring trap, a leading zero read as octal.
+    if [ -n "${SENDSPIN_BUFFER_MS}" ]; then
+        case ${SENDSPIN_BUFFER_MS} in
+            *[!0-9]*)
+                sendspin::log "SENDSPIN_BUFFER_MS is \"${SENDSPIN_BUFFER_MS}\", which is not a whole number of milliseconds."
+                exit 1
+                ;;
+        esac
+        if [ "${#SENDSPIN_BUFFER_MS}" -gt 4 ] \
+            || [ "$((10#${SENDSPIN_BUFFER_MS}))" -lt 10 ] \
+            || [ "$((10#${SENDSPIN_BUFFER_MS}))" -gt 2000 ]; then
+            sendspin::log "SENDSPIN_BUFFER_MS is ${SENDSPIN_BUFFER_MS}, outside the 10 to 2000 milliseconds the player accepts."
+            exit 1
+        fi
+    fi
 }
 
 # Whether this container runs its own dbus and avahi-daemon, recorded once by

@@ -62,6 +62,15 @@ through a proxy.
 Do not put credentials in this field. It is shown as plain text on the
 configuration page and is included in Home Assistant backups.
 
+## If the sound breaks up
+
+**Audio buffer** is how much audio the player keeps queued up, in milliseconds.
+Leave it empty and the player uses its own default, which is right for almost
+every system. Raise it if the sound stutters or drops out on a busy or slow
+machine — there is then more queued up to play through the gap. The cost is a
+longer wait when a track starts and when you seek, so raise it in steps rather
+than going straight to the top.
+
 ## Volume, mute and delay
 
 Volume, mute and the speaker delay are remembered across restarts and app

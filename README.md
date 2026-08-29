@@ -32,7 +32,7 @@ I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspi
 
 the player is waiting to be picked up in Music Assistant's Sendspin provider.
 
-This image's own configuration is four environment variables, all optional:
+This image's own configuration is seven environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -40,6 +40,37 @@ This image's own configuration is four environment variables, all optional:
 | `SENDSPIN_OUTPUT` | `default` | Where the audio goes, see below |
 | `SENDSPIN_LOG_LEVEL` | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
 | `SENDSPIN_SERVER` | unset | Dial out to one server instead of being discovered |
+| `SENDSPIN_BUFFER_MS` | unset (the player uses 100) | How much audio the output keeps buffered, `10`–`2000` |
+| `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:<channels>`, Compose only |
+| `SENDSPIN_ID` | derived from the interface MAC | This player's stable identity, Compose only |
+
+`SENDSPIN_BUFFER_MS` is how much audio the backend keeps queued up. Raise it
+where the sound breaks up on a busy or slow machine, at the cost of a longer
+wait when a track starts or is seeked; the Home Assistant app offers the same
+setting as **Audio buffer**. A value that is not a whole number between 10 and
+2000 stops the container rather than reaching the player, so a typo here is a
+line in the log and, under the restart policy, a container that keeps retrying
+it — not a player quietly running on a figure nobody meant.
+
+The last two are deliberately Compose-only, and the Home Assistant app has no
+field for either.
+
+`SENDSPIN_AUDIO_FORMAT` is for the DAC that will only play one shape properly.
+It moves that format to the front of the list this player advertises, so a
+server encodes to it in preference to anything else; everything the device takes
+is still offered behind it. The sharp edge is that a format the output cannot
+advertise is a refusal to start rather than a fallback, and under the shipped
+`docker-compose.yml`'s `restart: unless-stopped` that is a container looping on
+the same refusal. So check the device with `sendspin-cli -l` before pinning
+one. The app has no such DAC to hold: it plays through Home Assistant's
+PulseAudio, which converts.
+
+`SENDSPIN_ID` is for running two of these on one machine. They would otherwise
+both derive the same identity from the host's network interface MAC, and a
+server files volume, group membership and pairing under that identity — so the
+two players collide, and each setting lands on whichever of them connected last.
+Giving each container its own value separates them. One player per machine, the
+app included, has no collision to solve and should leave it unset.
 
 The two sound-server backends also read the environment their own client
 libraries define — `PULSE_SERVER`, `PULSE_COOKIE` and `PIPEWIRE_REMOTE` — which

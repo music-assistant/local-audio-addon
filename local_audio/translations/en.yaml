@@ -17,3 +17,9 @@ configuration:
       cannot discover the player by itself — doing so also stops the player
       being discoverable. Do not put a password in here; it is stored and shown
       as plain text.
+  buffer_ms:
+    name: Audio buffer
+    description: >-
+      How much audio the player keeps queued up, in milliseconds, between 10 and
+      2000. Leave it empty unless the sound breaks up — raising it rides out a
+      busy system, at the cost of a longer wait when a track starts or you seek.

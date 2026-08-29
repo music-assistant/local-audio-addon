@@ -26,6 +26,23 @@ install -m 600 /dev/null "${SENDSPIN_CONF}"
     printf 'name = %s\n' "${SENDSPIN_NAME}"
     printf 'output = %s\n' "${SENDSPIN_OUTPUT}"
     printf 'log-level = %s\n' "${SENDSPIN_LOG_LEVEL}"
+    # These two deliberately override an upstream default rather than leaving it
+    # alone, which is why they are written unconditionally where `buffer-ms`
+    # below is not: upstream's defaults name the library this is built on, and a
+    # server's device list should name the product instead. They are settable
+    # from neither deployment because the product is this image, not something a
+    # user assembles.
+    printf 'manufacturer = %s\n' 'Music Assistant'
+    printf 'product-name = %s\n' 'Local Audio'
+    if [ -n "${SENDSPIN_BUFFER_MS}" ]; then
+        printf 'buffer-ms = %s\n' "${SENDSPIN_BUFFER_MS}"
+    fi
+    if [ -n "${SENDSPIN_AUDIO_FORMAT}" ]; then
+        printf 'audio-format = %s\n' "${SENDSPIN_AUDIO_FORMAT}"
+    fi
+    if [ -n "${SENDSPIN_ID}" ]; then
+        printf 'id = %s\n' "${SENDSPIN_ID}"
+    fi
     if [ -n "${SENDSPIN_SERVER}" ]; then
         printf 'server = %s\n' "${SENDSPIN_SERVER}"
     fi
