@@ -529,9 +529,10 @@ start_server() {
     fail 'the stand-in server never reported a port'
 }
 
-# That the stand-in got as far as `outcome` with the player under test. Without this, a check
-# asserting a hook's output would report the player's failure to connect as a missing hook, and
-# one asserting a hook's *absence* would pass having never streamed anything.
+# That the stand-in got as far as `outcome` with the player under test. It is what keeps the
+# hook assertions honest about which half failed: without it, a player that never reached the
+# stand-in at all -- a container with no route to the host, a stream that was refused -- reads
+# as a hook that did not run, and the failure names the wrong thing.
 assert_server_reached() {
     local outcome=$1 what=$2
     local waited=0
@@ -1292,9 +1293,9 @@ check_confined_stop() {
 }
 
 # The two options that are a command rather than data. Both halves are asserted: that an unset
-# hook is absent from the rendered config -- a `hook-start =` with nothing after it is still a
-# command the player would try to run -- and that a set one arrives under the key the player
-# reads and is then really run when a stream starts and ends.
+# hook is absent from the rendered config, which is the rule every optional key here follows,
+# and that a set one arrives under the key the player reads and is then really run when a
+# stream starts and ends.
 #
 # Running one needs a stream, and a stream needs a server, which is what scripts/fake_server.py
 # is. Nothing else in this suite has ever needed one: every other check is about a player that

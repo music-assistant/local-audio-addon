@@ -72,9 +72,10 @@ sendspin::read_options() {
     SENDSPIN_AUDIO_FORMAT="${SENDSPIN_AUDIO_FORMAT:-}"
     SENDSPIN_ID="${SENDSPIN_ID:-}"
 
-    # Empty rather than defaulted for the same reason as the two above: an unset
-    # hook has to be absent from the rendered config, because a `hook-start =`
-    # with nothing after it is still a command the player would run.
+    # Empty rather than defaulted, like the three above: the run script writes
+    # only the keys that have a value, so a hook nobody set is absent from the
+    # rendered config rather than sitting in it as a key with nothing after it.
+    # There is no default a hook could sensibly have.
     SENDSPIN_HOOK_START="${SENDSPIN_HOOK_START:-}"
     SENDSPIN_HOOK_STOP="${SENDSPIN_HOOK_STOP:-}"
 

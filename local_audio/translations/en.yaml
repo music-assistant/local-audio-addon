@@ -28,7 +28,7 @@ configuration:
     description: >-
       Left empty nothing runs, which is what you want unless you have something
       to switch on — an amplifier relay, a light. Whatever you put here is a
-      shell command and is run as typed, inside this add-on, every time a stream
+      shell command and is run as typed, inside this app, every time a stream
       starts; it does not hold up the audio, and a command that fails is a line
       in the log rather than a player that stops. SENDSPIN_EVENT, and where the
       server said so SENDSPIN_SERVER_NAME and SENDSPIN_CLIENT_NAME, are in its
@@ -37,4 +37,4 @@ configuration:
     name: Command to run when playback stops
     description: >-
       The same thing at the other end of a stream, for switching that amplifier
-      back off. It too is a shell command run as typed, inside this add-on.
+      back off. It too is a shell command run as typed, inside this app.
