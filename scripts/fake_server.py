@@ -132,7 +132,11 @@ def receive_frame(connection):
 
 
 def send_frame(connection, opcode, payload):
-    """One unmasked frame. A server never masks, which is the whole of the difference."""
+    """One unmasked frame. A server never masks, which is the whole of the difference.
+
+    The two-byte length is the largest this writes. The longest thing it sends is a
+    server/hello of a couple of hundred bytes, so the 64-bit form has nothing to carry.
+    """
     header = bytearray([0x80 | opcode])
     length = len(payload)
     if length < 126:
