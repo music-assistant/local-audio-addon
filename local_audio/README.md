@@ -143,6 +143,22 @@ notice them and switch, or pick an output that is plugged in from the **Audio**
 panel. The log names the port it is playing out of at every start, so it is
 worth reading first.
 
+### If the sound stops part-way through
+
+An output that was working and then goes away — Home Assistant's audio server
+restarting, or a USB DAC unplugged — no longer leaves this player silent until
+the next track. It notices, and keeps trying to open the output again: five
+attempts over about a minute, the first a couple of seconds after the sound
+stops and each following gap longer than the last. If the output comes back in
+that time the music picks up part-way through the track, with nothing to do at
+this end. Everything else playing in the group carries on undisturbed
+throughout.
+
+If it does not come back inside that minute the player stops asking and says so
+in its log, rather than retrying forever. Nothing is stuck: the next track opens
+the output afresh, so playing something new is the way back once whatever went
+missing is there again.
+
 ## Known rough edges
 
 This app is **experimental**. It works, but it has not been through wide testing
