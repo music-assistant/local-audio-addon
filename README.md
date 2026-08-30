@@ -369,17 +369,19 @@ Attached to it is a `docker-compose.yml` pinned to the released image, which
 replacing `build: .` with the image that was published. It is generated rather
 than kept as a second copy so the two cannot drift, and it is never committed.
 
-This lands after `v0.1.8`, so `v0.1.6`, `v0.1.7` and `v0.1.8` have tags and
-published images but no Release object; backfilling them is a manual job.
-
 Once the whole workflow succeeds — the Release included —
 `.github/workflows/sync-store.yml` mirrors `local_audio/` from the released
-commit into the store repository and opens a pull request there; that is the
-second half of the flow, and **Store card sync** below covers it. A person
-merges that pull request, so between the release finishing and the merge ghcr
-carries a version the store does not yet offer. A release job that failed after
-the image published therefore holds the store bump back too, and re-running the
-workflow is what releases it.
+commit into the store repository and pushes it straight to the default branch
+there; that is the second half of the flow, and **Store card sync** below covers
+it. Nothing waits on a person, so the store offers the new version as soon as
+the sync run finishes. A release job that failed after the image published does
+hold the store bump back, because the sync only runs behind a release that
+concluded green — re-running the workflow is what releases it.
+
+`main`'s `version:` can therefore sit ahead of the newest tag, and today it does:
+`0.1.12` against `v0.1.8`. That is the design rather than drift — the bump lands
+with the change and the tag is the separate decision above — and it says only
+that those versions have not been released yet.
 
 ## Store card sync
 
@@ -388,21 +390,32 @@ The card the store offers this app from lives in
 and it names both the image and the version to pull, so it has to be bumped for
 every release. `.github/workflows/sync-store.yml` does that: once a release has
 published, it mirrors `local_audio/` from the released tag into that repository
-and opens a pull request there for somebody to merge. It mirrors the whole
-directory rather than the version line, so a release that changed the app's
-README, translations or apparmor profile carries those across too. The card's
-`icon.png` and `logo.png` belong to the store repository and are left alone —
-and if this repository ever starts shipping either, the sync stops and says so
-rather than deciding on its own which copy wins.
+and commits it straight onto the default branch there, as
+`Update Local Audio to X.Y.Z` — which is how that repository's other cards are
+bumped too. There is no pull request and nobody merges anything, so there is no
+window in which ghcr carries a version the store does not offer. A push rejected
+because that branch moved in the meantime is rebased and retried a few times;
+one that failed for any other reason — an expired token, branch protection —
+fails the job then and there with git's own output, rather than being retried as
+a race and reported as one.
+
+It mirrors the whole directory rather than the version line, so a release that
+changed the app's README, translations or apparmor profile carries those across
+too. Wholesale in both directions: an edit made to `local_audio/` on the store
+side is reverted by the next release, with no review in front of it. The card's
+`icon.png` and `logo.png` are the exception, held as store-owned and left alone
+— and if this repository ever starts shipping either, the sync stops and says so
+rather than deciding on its own which copy wins. Anything else the store means
+to keep belongs on that list in the workflow.
 
 The sync reads a `STORE_SYNC_TOKEN` secret from this repository: a fine-grained
 token scoped to `music-assistant/home-assistant-addon` alone, granting
-`contents: write` and `pull-requests: write`. Creating it is a manual step, and
-until it exists every release fails its sync and says so. The pull requests it
-opens are authored by whatever account owns the token; a machine account keeps
-the store's history legible if a personal one reads oddly there. A sync that failed
-quietly would have no symptom at all: the store would go on offering the
-previous version, every install would keep working, and the release would
+`contents: write` and nothing else. Creating it is a manual step, and until it
+exists every release fails its sync and says so. The commits it pushes are
+authored by `github-actions[bot]` but made over that token, so a machine account
+keeps the store's history legible if a personal one reads oddly there. A sync
+that failed quietly would have no symptom at all: the store would go on offering
+the previous version, every install would keep working, and the release would
 simply never arrive.
 
 ## Health
