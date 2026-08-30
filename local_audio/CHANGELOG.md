@@ -2,6 +2,8 @@
 
 ## 0.1.13
 
+Built on `sendspin-cli` v0.1.6, and through it `sendspin-cpp` v0.7.2.
+
 - An audio output that goes away and comes back is now picked up again on its
   own, usually within a few seconds, instead of leaving this player silent until
   the next track starts. Home Assistant's PulseAudio restarting is the common
