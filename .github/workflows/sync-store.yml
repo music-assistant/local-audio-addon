@@ -36,11 +36,11 @@ permissions:
   contents: read
 
 # One group per released version, and no cancel-in-progress: a replayed run of the same release
-# queues behind the first and then exits green at the existing-PR check below. Cancelling would be
-# worse -- its window falls between the push and the pull request, leaving a branch with no pull
-# request, which the job treats as a hard failure needing a person. A workflow-wide group would be
-# worse still: GitHub keeps one pending run per group, so a second version's sync could be dropped
-# in favour of the first's.
+# queues behind the first and then exits green at the "nothing to sync" check below, because the
+# store already carries what it would have pushed. Cancelling would gain nothing over that, and
+# would risk stopping a run between its commit and its push. A workflow-wide group would be worse
+# still: GitHub keeps one pending run per group, so a second version's sync could be dropped in
+# favour of the first's.
 concurrency:
   group: sync-store-${{ github.event.workflow_run.head_branch }}
 
@@ -73,7 +73,6 @@ jobs:
       # `refs/tags/v0.1.0` -- and `head_sha` the commit it points at.
       TAG: ${{ github.event.workflow_run.head_branch }}
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-      RELEASE_RUN_URL: ${{ github.event.workflow_run.html_url }}
     steps:
       # Both of these arrive in the event payload rather than from anything this job controls, and
       # a wrong value in either is quiet. An empty `head_sha` in particular makes the checkout
@@ -101,7 +100,7 @@ jobs:
           STORE_SYNC_TOKEN: ${{ secrets.STORE_SYNC_TOKEN }}
         run: |
           [ -n "$STORE_SYNC_TOKEN" ] || {
-            echo "::error::secret STORE_SYNC_TOKEN is unset -- $STORE_REPO cannot be reached, so this release has not been synced. It wants a fine-grained token scoped to that repository alone, with contents:write and pull-requests:write."
+            echo "::error::secret STORE_SYNC_TOKEN is unset -- $STORE_REPO cannot be reached, so this release has not been synced. It wants a fine-grained token scoped to that repository alone, with contents:write."
             exit 1
           }
 
@@ -162,16 +161,23 @@ jobs:
           token: ${{ secrets.STORE_SYNC_TOKEN }}
           path: store
 
-      - name: Mirror the card and open the pull request
+      - name: Mirror the card and push it
         env:
-          GH_TOKEN: ${{ secrets.STORE_SYNC_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          branch="sync/local-audio-$VERSION"
+          # The branch the checkout above left the store repository on: its default branch, which
+          # is where its own version bumps land, as single-parent commits a bot pushes.
+          default_branch="$(git -C store rev-parse --abbrev-ref HEAD)"
 
           # The whole directory, not a `version:` edit: the card also carries the README the store
           # renders, the translations and the apparmor profile, and a release that changed any of
           # those is not synced by a version bump alone.
+          #
+          # Wholesale in both directions. Anything hand-added to `local_audio/` on the store side
+          # is reverted by the next release, and nobody reviews that happening; the artwork
+          # assertion below is the whole of what stands between this mirror and the files that
+          # repository genuinely owns. A file the store means to keep belongs on that list rather
+          # than in somebody's memory.
           staged="$RUNNER_TEMP/card"
           rm -rf "$staged"
           cp -R source/local_audio "$staged"
@@ -195,73 +201,41 @@ jobs:
           rm -rf store/local_audio
           mv "$staged" store/local_audio
 
-          # Before any branch is made, so that the ordinary case of a release that changed nothing
-          # the store can see -- or one whose pull request a maintainer has already merged --
-          # finishes here rather than leaving a branch behind to explain.
           git -C store add --all -- local_audio
+
+          # Before anything is committed, so that the ordinary case of a release that changed
+          # nothing the store can see -- including a replay of a sync that already landed --
+          # finishes here green rather than pushing an empty commit.
           if git -C store diff --cached --quiet; then
             echo "$STORE_REPO already carries local_audio at $VERSION -- nothing to sync"
             exit 0
           fi
 
-          # A re-run of the release, or a replay of this workflow, must not open a second pull
-          # request. Exiting green rather than failing because the branch is named for the version
-          # and a tag is immutable, so an open pull request on that branch proposes this same
-          # released tree by construction; there is no other content it could be carrying.
-          existing="$(gh pr list --repo "$STORE_REPO" --head "$branch" --state open --json url --jq '.[0].url // empty')"
-          if [ -n "$existing" ]; then
-            echo "$VERSION is already proposed at $existing"
-            exit 0
-          fi
-
-          # A branch with no open pull request behind it is either a proposal somebody closed or a
-          # previous run that pushed and then failed. Which of those it is decides whether it may
-          # be overwritten, neither reading is available from here, and pushing over it destroys
-          # the evidence for whoever could tell them apart.
-          #
-          # 0 is found and 2 is a clean no-match; anything else is an expired token or a network
-          # blip, and is neither. Told apart rather than collapsed into "absent", which is the
-          # reading that would let a transport failure open the branch this guard protects.
-          found=0
-          git -C store ls-remote --exit-code --heads origin "$branch" >/dev/null || found=$?
-          case "$found" in
-            0)
-              echo "::error::$STORE_REPO already has branch $branch and no open pull request for it -- reopen the pull request or delete the branch, then re-run this workflow"
-              exit 1
-              ;;
-            2) ;;
-            *)
-              echo "::error::could not establish whether $STORE_REPO has branch $branch; git ls-remote exited $found"
-              exit 1
-              ;;
-          esac
-
-          git -C store switch --create "$branch"
           git -C store config user.name 'github-actions[bot]'
           git -C store config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git -C store commit --message "Update Local Audio to $VERSION"
-          # Tracking set, so that the `gh` call below reads the head branch off the checkout rather
-          # than matching it up by name.
-          git -C store push --set-upstream origin "$branch"
 
-          # Assembled from the release's own identifiers and nothing out of the tree that was just
-          # copied. A body quoting a mirrored README or changelog would be this repository handing
-          # whatever that file says to a command holding a cross-repository write token.
-          body="$(printf '%s\n' \
-            "Mirrors \`local_audio/\` from \`$GITHUB_REPOSITORY@$RELEASE_SHA\`, released as $TAG." \
-            "" \
-            "\`ghcr.io/$GITHUB_REPOSITORY:$VERSION\` was published by $RELEASE_RUN_URL.")"
+          # The store's default branch can move between the checkout and the push -- its other
+          # cards are bumped onto it the same way -- so a rejected push is ordinary rather than an
+          # error. Rebase onto what landed and try again, bounded: a push that keeps losing means
+          # that repository is being written to faster than this can follow, and a job that looped
+          # on it would hold the runner until the timeout instead of saying so.
+          attempts=3
+          for attempt in $(seq 1 "$attempts"); do
+            if [ "$attempt" -gt 1 ]; then
+              git -C store pull --rebase origin "$default_branch" || {
+                git -C store rebase --abort || true
+                echo "::error::the mirrored card conflicts with a change made to local_audio/ in $STORE_REPO, so $VERSION has not been synced -- reconcile that change there, then re-run this workflow"
+                exit 1
+              }
+            fi
 
-          # A pull request where this store's own bumps are commits a bot pushes straight to main.
-          # The mirror above is wholesale, so it also reverts anything a maintainer hand-added to
-          # the card on the store side, and the pull request is what puts that in front of the one
-          # person who would know it mattered. Dropping to a direct push, once that has been dull
-          # for a few releases, is this step deleted and the branch above pushed to the default
-          # branch instead.
-          #
-          # Run from the checkout so that the repository and the head branch are the ones `gh`
-          # reads for itself, rather than two more arguments that could disagree with the push.
-          cd store
-          gh pr create \
-            --title "Update Local Audio to $VERSION" \
-            --body "$body"
+            if git -C store push origin "HEAD:$default_branch"; then
+              echo "$STORE_REPO now carries local_audio at $VERSION"
+              exit 0
+            fi
+            echo "push $attempt of $attempts to $default_branch was rejected"
+          done
+
+          echo "::error::$attempts pushes to $default_branch of $STORE_REPO were rejected in turn -- the branch is moving faster than this sync can rebase onto it, so $VERSION has not been synced"
+          exit 1
