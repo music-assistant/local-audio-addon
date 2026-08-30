@@ -427,8 +427,24 @@ Attached to it is a `docker-compose.yml` pinned to the released image, which
 replacing `build: .` with the image that was published. It is generated rather
 than kept as a second copy so the two cannot drift, and it is never committed.
 
-This lands after `v0.1.8`, so `v0.1.6`, `v0.1.7` and `v0.1.8` have tags and
-published images but no Release object; backfilling them is a manual job.
+One number identifies a release of *this* add-on, and it is the same number in
+every place that names one: `local_audio/config.yaml`'s `version:`, the
+`vMAJOR.MINOR.PATCH` tag, the `:VERSION` image tag on ghcr, and the `version:`
+on the store card. The preflight refuses a tag that disagrees with the manifest,
+and the manifest is what the store card is mirrored from, so the four cannot
+drift *through* a release — only by not having one.
+
+That is worth stating because they have drifted exactly that way before: 0.1.9
+through 0.1.12 were bumped and written up in merged pull requests and then never
+tagged, so for a while the store went on offering 0.1.8 while `main` said 0.1.12.
+Nothing here can catch that, because the tag lives outside the commit — the only
+guard is cutting the release. A version bumped and left untagged is work no user
+has.
+
+None of this is the upstream player's version. `sendspin-cli` and `sendspin-cpp`
+have their own release numbers, which happen to look alike; they are recorded in
+`BUILD-INFO.txt` and named in the changelog's `Built on` lines, and they move
+independently of this add-on's.
 
 Once the whole workflow succeeds — the Release included —
 `.github/workflows/sync-store.yml` mirrors `local_audio/` from the released
