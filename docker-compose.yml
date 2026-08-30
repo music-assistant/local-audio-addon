@@ -74,6 +74,22 @@ services:
       # server-side setting would land on whichever connected last. Give each
       # its own only when running more than one on the same machine.
       # SENDSPIN_ID: living-room-left
+      # Run a shell command when a stream starts and when it stops -- switching
+      # an amplifier relay on and off again is what these are for. The value is
+      # a command, not data: it is handed to `sh -c` inside the container and
+      # runs with whatever that container can reach. The event's facts arrive as
+      # SENDSPIN_EVENT (start|stop) and, where the server said so,
+      # SENDSPIN_SERVER_ID, SENDSPIN_SERVER_NAME, SENDSPIN_SERVER_URL,
+      # SENDSPIN_CLIENT_ID and SENDSPIN_CLIENT_NAME. Neither holds up playback,
+      # and a non-zero exit is a warning in the log rather than a player failure.
+      #
+      # To read one of those in the command itself, write it `$$SENDSPIN_EVENT`.
+      # A single `$` is expanded by `docker compose` before the container is
+      # ever started, so the hook would be handed an empty string; the doubled
+      # form is what reaches it. Neither example below has that problem, and a
+      # command that quietly did nothing would be a hard one to work out.
+      # SENDSPIN_HOOK_START: curl -fsS -X POST http://192.168.1.20/relay/0?turn=on
+      # SENDSPIN_HOOK_STOP: curl -fsS -X POST http://192.168.1.20/relay/0?turn=off
       # Dial out to one specific server instead of waiting to be discovered.
       # Any value here suppresses the mDNS advertisement.
       # SENDSPIN_SERVER: 192.168.1.10:8927

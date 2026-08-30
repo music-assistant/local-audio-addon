@@ -43,6 +43,12 @@ install -m 600 /dev/null "${SENDSPIN_CONF}"
     if [ -n "${SENDSPIN_ID}" ]; then
         printf 'id = %s\n' "${SENDSPIN_ID}"
     fi
+    if [ -n "${SENDSPIN_HOOK_START}" ]; then
+        printf 'hook-start = %s\n' "${SENDSPIN_HOOK_START}"
+    fi
+    if [ -n "${SENDSPIN_HOOK_STOP}" ]; then
+        printf 'hook-stop = %s\n' "${SENDSPIN_HOOK_STOP}"
+    fi
     if [ -n "${SENDSPIN_SERVER}" ]; then
         printf 'server = %s\n' "${SENDSPIN_SERVER}"
     fi

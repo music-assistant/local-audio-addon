@@ -71,6 +71,34 @@ machine — there is then more queued up to play through the gap. The cost is a
 longer wait when a track starts and when you seek, so raise it in steps rather
 than going straight to the top.
 
+## Switching an amplifier on with the music
+
+**Command to run when playback starts** and **Command to run when playback
+stops** are for the amplifier or the light that should be on for as long as this
+player is playing. Leave both empty and nothing runs, which is what almost every
+system wants.
+
+Each is a shell command, and it is run as typed, inside this app, on every stream
+that starts or ends — so it is only as good as what this app can reach. `curl` at
+a smart relay's HTTP endpoint is the usual shape:
+
+```
+curl -fsS -X POST http://192.168.1.20/relay/0?turn=on
+```
+
+The command does not hold up playback, and one that fails writes a line in the
+log rather than stopping the player. Anything it prints goes to the log too,
+which is the place to look when a command is not doing what you expected.
+`SENDSPIN_EVENT` is `start` or `stop` in its environment, so one command can
+serve both fields.
+
+Two things worth knowing before you use them. A command here runs with the same
+access this app has, so treat the field the way you would treat a terminal on
+this machine — and only paste in something you understand. And filling either
+field is not what opens that door: this app is allowed to run commands whether or
+not you set one, because the permission it needs is fixed when the app is
+installed rather than when you save the setting.
+
 ## Volume, mute and delay
 
 Volume, mute and the speaker delay are remembered across restarts and app

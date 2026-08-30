@@ -32,7 +32,7 @@ I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspi
 
 the player is waiting to be picked up in Music Assistant's Sendspin provider.
 
-This image's own configuration is seven environment variables, all optional:
+This image's own configuration is nine environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -41,6 +41,8 @@ This image's own configuration is seven environment variables, all optional:
 | `SENDSPIN_LOG_LEVEL` | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
 | `SENDSPIN_SERVER` | unset | Dial out to one server instead of being discovered |
 | `SENDSPIN_BUFFER_MS` | unset (the player uses 100) | How much audio the output keeps buffered, `10`–`2000` |
+| `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
+| `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
 | `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:<channels>`, Compose only |
 | `SENDSPIN_ID` | derived from the interface MAC | This player's stable identity, Compose only |
 
@@ -52,8 +54,45 @@ setting as **Audio buffer**. A value that is not a whole number between 10 and
 line in the log and, under the restart policy, a container that keeps retrying
 it — not a player quietly running on a figure nobody meant.
 
-The last two are deliberately Compose-only, and the Home Assistant app has no
-field for either.
+`SENDSPIN_HOOK_START` and `SENDSPIN_HOOK_STOP` are for switching something on
+while the music plays — an amplifier relay, a light. Each is a shell command,
+run through `sh -c` inside this container every time a stream starts or ends:
+
+```yaml
+SENDSPIN_HOOK_START: curl -fsS -X POST http://192.168.1.20/relay/0?turn=on
+SENDSPIN_HOOK_STOP: curl -fsS -X POST http://192.168.1.20/relay/0?turn=off
+```
+
+The command runs with what the container has — `curl` and `jq` come with the Home
+Assistant base image this is built on, alongside a small Debian userland — not the
+host's tools, and not the host's network stack unless the container has
+`network_mode: host` as the shipped Compose file does. It does not hold up
+playback: the player starts it and carries on, and a command that exits non-zero
+is a warning in the log rather than a player that stops. Its output goes to the
+log too.
+
+What the event was arrives in the environment:
+
+| Variable | Set when |
+| --- | --- |
+| `SENDSPIN_EVENT` | always, as `start` or `stop` |
+| `SENDSPIN_SERVER_ID`, `SENDSPIN_SERVER_NAME` | the server said who it was |
+| `SENDSPIN_SERVER_URL` | this player dialled out, so there is a URL it dialled |
+| `SENDSPIN_CLIENT_ID` | `SENDSPIN_ID` was set; the derived default is not exposed |
+| `SENDSPIN_CLIENT_NAME` | always, as the player's name |
+
+Anything unknown for an event is unset rather than empty, so `[ -n "$SENDSPIN_SERVER_ID" ]`
+means what it looks like. To read one of them inside a command written in
+`docker-compose.yml`, double the dollar — `$$SENDSPIN_EVENT`. A single `$` is
+expanded by `docker compose` itself before the container starts, so the hook is
+handed an empty string, and a command that quietly does nothing is a hard fault to
+track down. The Home Assistant app offers the same two as
+**Command to run when playback starts** and **…stops**, and its AppArmor profile
+had to be widened to let the player exec anything at all before they would work;
+the section on the app below covers what that grants.
+
+The last two variables in the table are deliberately Compose-only, and the Home
+Assistant app has no field for either.
 
 `SENDSPIN_AUDIO_FORMAT` is for the DAC that will only play one shape properly.
 It moves that format to the front of the list this player advertises, so a
@@ -209,8 +248,46 @@ binary for the wrong one.
 ## Home Assistant app
 
 `local_audio/` is the app manifest, wrapping this same image, so the runtime
-behaviour described above is shared. It reads its `name`, `log_level` and
-`server` from the app options instead of the environment.
+behaviour described above is shared. It reads its `name`, `log_level`, `server`,
+`buffer_ms`, `hook_start` and `hook_stop` from the app options instead of the
+environment.
+
+The two hooks are the one option here that is code rather than a value, and they
+are the reason this app's AppArmor profile grants the player an exec at all. The
+player runs a hook by exec'ing the shell, and its child profile in
+`local_audio/apparmor.txt` permitted no exec of anything before that — so
+without a rule the hooks would be configured, started, and fail — the log
+would say the hook exited 127, which is a shell the player could not execute, and
+nothing anywhere in the container would say that AppArmor was why. The rule is `/usr/bin/** ix`, which has to reach `/usr/bin/dash` because
+that is where `/bin/sh` resolves to in this image and AppArmor mediates the
+resolved path — a rule written against `/bin/sh` would load and then deny. It
+covers the programs a hook runs as well as the shell, because a hook that could
+run only the shell's builtins would not be a feature. `/usr/sbin` is deliberately
+not granted beside it.
+
+They are `ix` — the shell and everything it starts run under the player's own
+profile — rather than a transition into a profile written for hooks, which would
+be the better grant and cannot be expressed. A child profile is reachable only by
+name; the one name form that needs none is `cx`, which resolves inside the
+profile it is written in, and that profile is already a child. AppArmor allows
+one level of child profile and no more: the second level loads and the transition
+is then refused at exec with `profile transition not found`. Every other form
+needs an absolute profile name, and this file may not use one because the
+Supervisor rewrites the top-level name to the installed slug before loading.
+
+What that costs, plainly: someone who takes this player over through the network
+can now start a shell, and through it run any program in the image. What it does
+not do is widen what any of them may touch — they all run under the same profile,
+holding no capability, able to open only the files it lists. No file rule was added
+alongside it: a hook writes where the player writes, or nowhere.
+
+The other route to that shell is the one the feature is for, and it is worth being
+equally plain about: anyone who can edit this app's options can run a command as
+root inside a container with `host_network: true` and Home Assistant's audio mapped
+in. That is not a privilege this change creates — someone with app-configuration
+access on a Home Assistant machine can already install a terminal app and do more
+than that — but it does mean the two fields deserve the same care as any other
+root shell on the box.
 
 The app plays through the PulseAudio that Home Assistant maps in, and the sound
 card is chosen in the app's own Audio panel — it offers no output option of its
