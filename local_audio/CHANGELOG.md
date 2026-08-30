@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.13
+
+- An audio output that goes away and comes back is now picked up again on its
+  own, usually within a few seconds, instead of leaving this player silent until
+  the next track starts. Home Assistant's PulseAudio restarting is the common
+  case; a USB DAC unplugged and plugged back in again is the other. While the
+  output is missing the player throws its audio away rather than stalling, so
+  everything else in the group plays on undisturbed, and when the output answers
+  again this player rejoins part-way through the track it was already on.
+- It does not keep asking forever. There are five attempts, the first about two
+  seconds after the output goes, each following wait twice the last up to thirty
+  seconds — about a minute of cover in total, which is longer than a sound
+  server takes to restart and longer than it takes to plug a DAC back in. After
+  that the player says so in its log and waits for the next track, which opens
+  the output afresh anyway. An output that is never coming back therefore costs
+  a minute of retrying rather than an endless one.
+
 ## 0.1.12
 
 - Two new settings, **Command to run when playback starts** and **Command to run

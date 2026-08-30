@@ -143,6 +143,11 @@ under Compose there is none, so `default` is ALSA's own default over `/dev/snd`
 — usually the first card, not whatever the host routes its audio through. Name
 the card explicitly if that is not the one you want, for example `hw:1,0`.
 
+An ALSA device that disappears while a stream is playing is reopened by the
+player rather than being lost until the next track;
+[When the output goes away mid-stream](#when-the-output-goes-away-mid-stream)
+covers what that looks like in a log and how long it keeps trying.
+
 ### PulseAudio
 
 Bind-mount the host's PulseAudio socket, point `PULSE_SERVER` at where it landed
@@ -319,6 +324,59 @@ a mixer and never opens a mixer to ask. It never writes to the sink: the level
 and the routing are shared with every other app and belong to the Audio panel.
 The check is app-only: under Compose there is no PulseAudio to ask, and it does
 nothing.
+
+### When the output goes away mid-stream
+
+That check runs once, at start. The other half of "no sound" is an output that
+was working and then was not — Home Assistant's PulseAudio restarting under the
+plugin PCM, or a USB DAC pulled out — and the player recovers from that on its
+own rather than staying silent until the next track. It is worth knowing what
+that looks like in a pasted log, because the first line of it is an error and
+reads like a fault.
+
+This one is not app-only, unlike the check above. It belongs to the ALSA
+backend, so it covers the app — which is always on ALSA — and every Compose
+deployment naming a PCM, `default` and `hw:` alike. A Compose deployment on the
+native `pulse` or `pipewire` backends is not on this path.
+
+The device going is reported once, with whatever ALSA called it:
+
+```
+alsa: 'default' is gone (No such device)
+alsa: 'default' is not open -- discarding audio until it is back or a stream reconfigures it
+```
+
+Discarding rather than stalling is deliberate: the player is one of a
+synchronized group, so it throws away its share of the audio and lets the rest
+play on. Then it tries to reopen the device at the format the stream was
+configured in, and each attempt says which way it went:
+
+```
+alsa: 'default' is not back -- trying again shortly
+alsa: 'default' is back -- recovered without waiting for the next stream
+```
+
+The first of those is a debug line, so a default `log_level` shows only the
+recovery. A new stream arriving mid-outage takes its own attempt first and logs
+`alsa: could not restart 'default' (No such device) -- reopening` on its way
+to one.
+
+**The retries are bounded, and that is the part worth reading a log for.** Five
+attempts per stream: the first about two seconds after the loss, each following
+wait double the last up to a ceiling of thirty seconds — 2 + 4 + 8 + 16 + 30, so
+roughly a minute of cover. That is longer than a sound server takes to come back
+and longer than a DAC takes to be replugged, and it is deliberately not an
+indefinite retry: an outage that outlives it was not going to be fixed by asking
+again. When the budget is spent the player says so once, at warning level, and
+stops asking until something reconfigures the device:
+
+```
+alsa: 'default' is not back -- discarding until the next stream
+```
+
+The next stream re-resolves the device name and opens it afresh, which is its
+own recovery — so a log ending on that warning means the output never came back
+inside the minute, not that the player stopped trying for good.
 
 ## Cutting a release
 
