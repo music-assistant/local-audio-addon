@@ -103,14 +103,14 @@ readonly SUPERVISOR_TOKEN=smoke-supervisor-token
 
 # What the stream-hook checks ask a hook to print, and it is written the way it is on purpose.
 #
-# `%s` rather than the word, so that the line asserted below can only have come from a hook
-# that ran: the player logs the command itself at debug level, and a hook echoing a fixed
-# string would be matched by that log line whether or not the exec ever happened.
+# `%s` fed from the event, so the start and stop hooks print different lines. Asserting both is
+# then a statement that each one fired on its own event rather than one of them firing twice,
+# and it is the only thing in this suite that reads the environment a hook is handed.
 #
 # /usr/bin/printf rather than printf, because printf is one of dash's builtins -- so the bare
-# name would prove the shell started and nothing about whether the shell can run a program.
-# The absolute path is a second exec, from inside the hook, which is what an amplifier relay's
-# `curl` needs and what the profile's second rule grants.
+# name would prove the shell started and nothing about whether the shell can then run a
+# program. The absolute path is a second exec, from inside the hook, which is what an amplifier
+# relay's `curl` would need and what the profile's one exec rule has to cover as well.
 # shellcheck disable=SC2016  # $SENDSPIN_EVENT is for the hook's shell, not for this one.
 readonly HOOK_COMMAND='/usr/bin/printf "the %s hook ran\n" "$SENDSPIN_EVENT"'
 
@@ -1351,10 +1351,12 @@ check_stream_hooks() {
 }
 
 # The same thing under the profile the Supervisor installs, and the check this whole change
-# turns on. Running a hook is the only exec the player's child profile has, and an AppArmor
-# denial of it is invisible everywhere else: the container starts, the config renders, the
-# player streams, and the only symptom is a hook that silently does not run. The unconfined
-# check above cannot see it, because the rules it depends on are not in force there.
+# turns on. Running a hook is the only exec the player's child profile has, and a denial of it
+# is not loud: the container starts, the config renders, the player streams, and the log says
+# the hook exited 127 -- the player's account of an execve() it could not complete, which says
+# nothing about AppArmor. The kernel's own denial is on the host, where nothing in a container
+# log will ever show it. The unconfined check above cannot produce any of that, because the
+# rule it turns on is not in force there.
 #
 # That profile permitted no exec of anything before this change, so deleting its one
 # `/usr/bin/** ix` line from local_audio/apparmor.txt is what proves this check tests the grant

@@ -256,8 +256,9 @@ The two hooks are the one option here that is code rather than a value, and they
 are the reason this app's AppArmor profile grants the player an exec at all. The
 player runs a hook by exec'ing the shell, and its child profile in
 `local_audio/apparmor.txt` permitted no exec of anything before that — so
-without a rule the hooks would be configured, reported as running, and silently
-denied. The rule is `/usr/bin/** ix`, which has to reach `/usr/bin/dash` because
+without a rule the hooks would be configured, started, and fail — the log
+would say the hook exited 127, which is a shell the player could not execute, and
+nothing anywhere in the container would say that AppArmor was why. The rule is `/usr/bin/** ix`, which has to reach `/usr/bin/dash` because
 that is where `/bin/sh` resolves to in this image and AppArmor mediates the
 resolved path — a rule written against `/bin/sh` would load and then deny. It
 covers the programs a hook runs as well as the shell, because a hook that could
