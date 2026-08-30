@@ -394,9 +394,10 @@ and commits it straight onto the default branch there, as
 `Update Local Audio to X.Y.Z` — which is how that repository's other cards are
 bumped too. There is no pull request and nobody merges anything, so there is no
 window in which ghcr carries a version the store does not offer. A push rejected
-because that branch moved in the meantime is rebased and retried a few times,
-and a job that runs out of retries fails saying so rather than leaving the
-release unsynced in silence.
+because that branch moved in the meantime is rebased and retried a few times;
+one that failed for any other reason — an expired token, branch protection —
+fails the job then and there with git's own output, rather than being retried as
+a race and reported as one.
 
 It mirrors the whole directory rather than the version line, so a release that
 changed the app's README, translations or apparmor profile carries those across

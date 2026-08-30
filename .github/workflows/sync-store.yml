@@ -35,12 +35,13 @@ on:
 permissions:
   contents: read
 
-# One group per released version, and no cancel-in-progress: a replayed run of the same release
-# queues behind the first and then exits green at the "nothing to sync" check below, because the
-# store already carries what it would have pushed. Cancelling would gain nothing over that, and
-# would risk stopping a run between its commit and its push. A workflow-wide group would be worse
-# still: GitHub keeps one pending run per group, so a second version's sync could be dropped in
-# favour of the first's.
+# One group per released version, and no cancel-in-progress. A replayed run of the same release
+# queues behind the first and then exits green at the "nothing to sync" check below, the store
+# already carrying what it would have pushed, so cancelling the first in its favour buys nothing.
+# A workflow-wide group would serialise two different versions instead, which is not nothing --
+# concurrent syncs both rewrite config.yaml, so the second is guaranteed the rebase below -- but
+# GitHub keeps only one pending run per group, so a third version arriving would be dropped
+# outright. A sync that rebases is better than a sync that never runs.
 concurrency:
   group: sync-store-${{ github.event.workflow_run.head_branch }}
 
@@ -153,13 +154,21 @@ jobs:
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
       # Credentials kept, unlike the checkout above: the push at the end of this job is made over
-      # them, and this is the one repository the token can reach.
+      # them, and this is the one repository the token can reach. Stated rather than defaulted,
+      # because it is the one setting here the job would fail on if the action's default moved.
+      #
+      # Full history because the rebase below needs a merge base with whatever landed on the
+      # default branch while this ran, and the shallow clone that is the default has none. That
+      # path is reached only in the race it exists for, so it is the one path a release never
+      # exercises -- and a handful of add-on cards is not a repository where depth buys anything.
       - name: Check out the store repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.STORE_REPO }}
           token: ${{ secrets.STORE_SYNC_TOKEN }}
           path: store
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Mirror the card and push it
         env:
@@ -167,7 +176,14 @@ jobs:
         run: |
           # The branch the checkout above left the store repository on: its default branch, which
           # is where its own version bumps land, as single-parent commits a bot pushes.
-          default_branch="$(git -C store rev-parse --abbrev-ref HEAD)"
+          #
+          # `symbolic-ref` rather than `rev-parse --abbrev-ref`, which answers a detached HEAD with
+          # the string `HEAD` -- and `push HEAD:HEAD` would create a branch called `HEAD` in
+          # somebody else's repository and report success.
+          default_branch="$(git -C store symbolic-ref --short HEAD)" || {
+            echo "::error::the $STORE_REPO checkout is not on a branch, so there is no default branch to push $TAG's card onto"
+            exit 1
+          }
 
           # The whole directory, not a `version:` edit: the card also carries the README the store
           # renders, the translations and the apparmor profile, and a release that changed any of
@@ -216,26 +232,45 @@ jobs:
           git -C store commit --message "Update Local Audio to $VERSION"
 
           # The store's default branch can move between the checkout and the push -- its other
-          # cards are bumped onto it the same way -- so a rejected push is ordinary rather than an
-          # error. Rebase onto what landed and try again, bounded: a push that keeps losing means
-          # that repository is being written to faster than this can follow, and a job that looped
-          # on it would hold the runner until the timeout instead of saying so.
+          # cards are bumped onto it the same way -- so a non-fast-forward rejection is ordinary
+          # rather than an error. Rebase onto what landed and try again, bounded: a push that keeps
+          # losing means that repository is being written to faster than this can follow, and a job
+          # that looped on it would hold the runner until the timeout instead of saying so.
+          #
+          # Only that one rejection is retried. The likeliest real failure of this workflow is an
+          # expired STORE_SYNC_TOKEN -- it is fine-grained and renewed by hand -- and branch
+          # protection appearing on the store's default branch is the next; retrying either three
+          # times and then reporting a race would send the reader somewhere the fault is not.
           attempts=3
           for attempt in $(seq 1 "$attempts"); do
             if [ "$attempt" -gt 1 ]; then
-              git -C store pull --rebase origin "$default_branch" || {
+              # Fetched and rebased in two steps rather than by `pull --rebase`, so that a fetch
+              # that failed is not reported below as a card that conflicts.
+              git -C store fetch origin "$default_branch" || {
+                echo "::error::could not fetch $default_branch from $STORE_REPO to rebase onto, so $VERSION has not been synced"
+                exit 1
+              }
+              git -C store rebase FETCH_HEAD || {
                 git -C store rebase --abort || true
                 echo "::error::the mirrored card conflicts with a change made to local_audio/ in $STORE_REPO, so $VERSION has not been synced -- reconcile that change there, then re-run this workflow"
                 exit 1
               }
             fi
 
-            if git -C store push origin "HEAD:$default_branch"; then
+            push_log="$RUNNER_TEMP/push-$attempt.log"
+            if git -C store push origin "HEAD:$default_branch" >"$push_log" 2>&1; then
+              cat "$push_log"
               echo "$STORE_REPO now carries local_audio at $VERSION"
               exit 0
             fi
-            echo "push $attempt of $attempts to $default_branch was rejected"
+            cat "$push_log"
+
+            grep -qE '\[rejected\].*(fetch first|non-fast-forward)' "$push_log" || {
+              echo "::error::pushing $VERSION to $default_branch of $STORE_REPO failed, and not because the branch had moved -- git's own output is above, and $VERSION has not been synced"
+              exit 1
+            }
+            echo "push $attempt of $attempts to $default_branch was rejected; $default_branch has moved"
           done
 
-          echo "::error::$attempts pushes to $default_branch of $STORE_REPO were rejected in turn -- the branch is moving faster than this sync can rebase onto it, so $VERSION has not been synced"
+          echo "::error::$attempts pushes to $default_branch of $STORE_REPO were rejected as non-fast-forward in turn -- the branch is moving faster than this sync can rebase onto it, so $VERSION has not been synced"
           exit 1
