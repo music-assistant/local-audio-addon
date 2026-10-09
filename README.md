@@ -77,7 +77,7 @@ What the event was arrives in the environment:
 | --- | --- |
 | `SENDSPIN_EVENT` | always, as `start` or `stop` |
 | `SENDSPIN_SERVER_ID`, `SENDSPIN_SERVER_NAME` | the server said who it was |
-| `SENDSPIN_SERVER_URL` | this player dialled out, so there is a URL it dialled |
+| `SENDSPIN_SERVER_URL` | `SENDSPIN_SERVER` is set and the stream came from the server this player discovered and connected to |
 | `SENDSPIN_CLIENT_ID` | `SENDSPIN_ID` was set; the derived default is not exposed |
 | `SENDSPIN_CLIENT_NAME` | always, as the player's name |
 
