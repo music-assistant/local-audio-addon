@@ -4,7 +4,7 @@ Plays Music Assistant audio out of the machine it runs on — through ALSA, or
 through a PulseAudio or PipeWire server the host already runs.
 
 This repository is packaging only. The player itself is
-[`sendspin-cli`](https://github.com/Sendspin/sendspin-cpp-cli), which lives
+[`sendspin-cpp-cli`](https://github.com/Sendspin/sendspin-cpp-cli), which lives
 upstream and is built here from a pinned ref — it is never forked into this
 repository. What this repository adds is a container image, and the Home
 Assistant app manifest in `local_audio/` that wraps the same image.
