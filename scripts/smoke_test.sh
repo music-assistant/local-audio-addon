@@ -962,9 +962,9 @@ check_default_name() {
         'and that is the name the rendered config carries'
 }
 
-# With an `mdns:` server configured, the player does not advertise, but the daemons are needed because
-# mDNS is how that server's name gets resolved. Leaving them down here would give a player that
-# can never find the thing it was told to connect to.
+# With an `mdns:` server configured, the player does not advertise, but the daemons are needed
+# because mDNS is how that server's name gets resolved. Leaving them down here would give a
+# player that can never find the thing it was told to connect to.
 check_mdns_server_mode() {
     local server=$1 container
     step "mDNS-resolved server ($server)"

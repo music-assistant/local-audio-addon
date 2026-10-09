@@ -34,11 +34,11 @@ options:
 # `server`, `buffer_ms` and the two hooks are optional with no default on
 # purpose, which is what keeps them out of `options:` above and so behind the
 # fold a user has to open deliberately. Setting a `server` switches the player to
-# discovering a server with mdns: or mdns:<name>, suppressing its own advertisement.
-# An unset `buffer_ms` has to reach the player as no setting at all rather than
-# as a number written here,
-# so that the default stays upstream's to change; the range is upstream's own, so
-# the configuration screen refuses what the player would refuse.
+# discovering a server with mdns: or mdns:<name>, suppressing its own
+# advertisement. An unset `buffer_ms` has to reach the player as no setting at
+# all rather than as a number written here, so that the default stays upstream's
+# to change; the range is upstream's own, so the configuration screen refuses
+# what the player would refuse.
 #
 # `hook_start` and `hook_stop` are `str?` because a shell command is what they
 # are: there is no narrower schema that would describe one, and no validation
