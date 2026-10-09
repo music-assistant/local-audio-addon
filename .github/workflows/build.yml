@@ -72,7 +72,7 @@ jobs:
       # script rather than the working directory the run happened to start in.
       #
       # shellcheck is the runner image's preinstall and floats with it, unlike actionlint above:
-      # GitHub-maintained tooling that fails loud at lint time does not need a digest of its own.
+      # GitHub-maintained tooling that fails loud at lint time does not need a pin of its own.
       - name: Lint the shell scripts
         run: |
           shellcheck --shell=bash --external-sources --source-path=rootfs \
