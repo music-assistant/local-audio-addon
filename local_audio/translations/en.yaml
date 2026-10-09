@@ -13,10 +13,12 @@ configuration:
     name: Music Assistant server
     description: >-
       Leave this empty and the player waits to be found over mDNS, which is what
-      you want. Set it to a host, host:port or ws:// URL only if the server
-      cannot discover the player by itself — doing so also stops the player
-      being discoverable. Do not put a password in here; it is stored and shown
-      as plain text.
+      you want. Use "mdns:" to discover any server or "mdns:<name>" for a
+      specific advertised server name instead; this stops the player being
+      discoverable. Hosts, host:port addresses and URLs are no longer accepted:
+      clear an old address or replace it with an mdns: value before starting.
+      Both modes need working mDNS. Do not put a password in here; it is stored
+      and shown as plain text.
   buffer_ms:
     name: Audio buffer
     description: >-

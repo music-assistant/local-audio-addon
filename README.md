@@ -26,7 +26,7 @@ Music Assistant discovers the player over mDNS and connects back in on port
 8928, which is why the container needs `network_mode: host`. Once the log reads
 
 ```
-I cli: sendspin-cli 0.1.6 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
+I cli: sendspin-cli 0.2.0 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
 I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspin)
 ```
 
@@ -39,7 +39,7 @@ This image's own configuration is nine environment variables, all optional:
 | `SENDSPIN_NAME` | `Local Audio` | Name shown in Music Assistant |
 | `SENDSPIN_OUTPUT` | `default` | Where the audio goes, see below |
 | `SENDSPIN_LOG_LEVEL` | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
-| `SENDSPIN_SERVER` | unset | Dial out to one server instead of being discovered |
+| `SENDSPIN_SERVER` | unset | Discover a server with `mdns:` (any) or `mdns:<name>` (named), instead of advertising this player |
 | `SENDSPIN_BUFFER_MS` | unset (the player uses 100) | How much audio the output keeps buffered, `10`–`2000` |
 | `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
 | `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
@@ -77,7 +77,7 @@ What the event was arrives in the environment:
 | --- | --- |
 | `SENDSPIN_EVENT` | always, as `start` or `stop` |
 | `SENDSPIN_SERVER_ID`, `SENDSPIN_SERVER_NAME` | the server said who it was |
-| `SENDSPIN_SERVER_URL` | this player dialled out, so there is a URL it dialled |
+| `SENDSPIN_SERVER_URL` | `SENDSPIN_SERVER` is set and the stream came from the server this player discovered and connected to |
 | `SENDSPIN_CLIENT_ID` | `SENDSPIN_ID` was set; the derived default is not exposed |
 | `SENDSPIN_CLIENT_NAME` | always, as the player's name |
 
@@ -114,6 +114,12 @@ app included, has no collision to solve and should leave it unset.
 The two sound-server backends also read the environment their own client
 libraries define — `PULSE_SERVER`, `PULSE_COOKIE` and `PIPEWIRE_REMOTE` — which
 the sections below cover.
+
+Fixed hosts, `host:port` addresses and URLs are no longer supported by
+`SENDSPIN_SERVER` (upstream's `-s` / `server` option). Existing address settings
+stop the container with a migration error. Clear the setting to restore default
+discovery, or replace it with `mdns:` or `mdns:<name>`. Both discovery modes
+require mDNS on the local network; this is not a workaround for blocked multicast.
 
 ## Choosing an output
 
@@ -214,11 +220,8 @@ it took:
   the player advertises through the host's Avahi. Use this when the host already
   runs Avahi, since `network_mode: host` would otherwise put two responders on
   port 5353;
-- `SENDSPIN_SERVER` names a plain host or URL — the player dials out and the
-  Sendspin spec suppresses the advertisement, so the bundled pair stays down.
-  An `mdns:` prefixed value still needs mDNS to resolve the server, so there
-  the pair does start;
-- otherwise the bundled pair starts.
+- otherwise the bundled pair starts, both when advertising this player and
+  when an `mdns:` server setting needs mDNS to discover a server.
 
 ## State
 
