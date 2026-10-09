@@ -7,14 +7,17 @@ ARG SENDSPIN_CLI_SHA=6b20f8582ffe7ff4fe467d5c4cd23dea0264a835
 # ghcr.io/home-assistant/amd64-base-debian:trixie, which ships s6-overlay v3 and
 # bashio. CI overrides this with the digest for the architecture it is building;
 # those per-arch digests live in .github/workflows/build.yml and release.yml, and
-# a bump must move all three files together, staying on one Debian release.
+# a bump must move all three files together.
+#
+# Both stages start from it, so the binary is linked against the libc it runs on
+# and a build pulls nothing from Docker Hub. The digest is per-architecture, not
+# a multi-arch index: the image is whatever architecture BUILD_FROM names, so
+# build natively and pass the matching digest rather than cross-building.
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786
 
-# debian:trixie-slim, by multi-arch index digest rather than a per-architecture
-# one, so that a cross-build resolves this stage to the target's architecture.
-# Must stay on the same release as BUILD_FROM above: the binary built here is
-# linked against that image's libc.
-FROM debian@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS build
+# s6-overlay and bashio come along unused: only /stage and /build-info.txt
+# leave this stage.
+FROM ${BUILD_FROM} AS build
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
