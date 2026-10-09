@@ -123,7 +123,7 @@ jobs:
       # by digest without also giving it a tag, and a tag is the one thing a leg on its own must
       # not create.
       - name: Set up buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to the registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -236,7 +236,7 @@ jobs:
       # carries the subcommand, and a tag push is the first chance to find this one broken. Set
       # up explicitly rather than left to whatever builder the runner image ships with.
       - name: Set up buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # `merge-multiple`, or each artifact arrives in a directory named after itself and the
       # paths below gain a redundant level. No `name:` or `pattern:`, so this asks for whatever
