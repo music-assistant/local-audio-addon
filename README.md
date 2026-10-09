@@ -244,11 +244,10 @@ docker exec ma-local-audio cat /usr/share/sendspin-cli/BUILD-INFO.txt
 ```
 
 `BUILD_FROM` selects the Home Assistant base image and defaults to the amd64
-one. Building on another architecture means passing the matching digest, which
-is what CI will do per architecture once it lands. The build stage is pinned to Debian's
-multi-arch *index* digest so that it resolves to whichever architecture is being
-built; replacing it with a per-architecture digest would quietly build the
-binary for the wrong one.
+one. Both stages start from it, so the image is whatever architecture that
+digest names: building for another one means building on that architecture and
+passing the matching digest, which is what CI does per architecture. A plain
+`docker build` with no build argument always produces an amd64 image.
 
 ## Home Assistant app
 

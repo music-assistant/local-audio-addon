@@ -4,7 +4,8 @@
 # Three pins stay manual on purpose, not by omission, each for a reason
 # recorded where the pin itself lives: the Dockerfile's SENDSPIN_CLI_REF and
 # SENDSPIN_CLI_SHA pair, the per-architecture base digests in the Dockerfile
-# and both workflows, and the actionlint image digest inside a `run:` script.
+# and both workflows, and the actionlint version and checksum inside a `run:`
+# script.
 version: 2
 updates:
   - package-ecosystem: github-actions

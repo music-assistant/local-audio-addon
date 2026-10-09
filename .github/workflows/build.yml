@@ -38,14 +38,24 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # actionlint's own container rather than an action wrapping it: one fewer third party with
-      # access to the workspace, and the pin is a digest rather than somebody's tag. That digest
-      # is actionlint 1.7.12, recorded here because a `run:` script is invisible to Dependabot.
+      # actionlint's release binary rather than an action wrapping it or its container: one fewer
+      # third party with access to the workspace, and no pull from Docker Hub, whose rate limit
+      # can fail this job before any of it has run. The pin is the version plus the sha256 that
+      # release's own checksums file gives for the asset, checked before anything is unpacked.
+      # Both are recorded here because a `run:` script is invisible to Dependabot. The binary
+      # finds the runner's shellcheck on PATH and runs it over every `run:` block.
       - name: Lint the workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
-          docker run --rm --volume "$PWD:/repo" --workdir /repo \
-            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
-            -color
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$RUNNER_TEMP/$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$tarball"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$tarball" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
 
       # Two invocations, and the split is what keeps this clean without suppressing anything.
       #
@@ -171,7 +181,7 @@ jobs:
             runner: ubuntu-24.04
             # Both base digests are passed rather than defaulted: the Dockerfile's default is the
             # amd64 one, so the arm64 leg has to be told. The Dockerfile's own comment carries
-            # why all three files must move together, and on one Debian release.
+            # why all three files must move together.
             base: ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786
             # What `docker image inspect` calls the result, and the third spelling of one thing:
             # the runner label says `arm`, docker says `arm64`, the add-on manifest `aarch64`.
