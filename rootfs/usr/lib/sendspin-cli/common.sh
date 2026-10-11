@@ -23,7 +23,7 @@ sendspin::log() {
 # container; the defaults below are applied to both so the two cannot drift.
 #
 # Stops the container on a value that would inject configuration keys, and on a
-# buffer the player would reject, rather than returning either to the caller.
+# buffer or server selector the player would reject, rather than returning it.
 sendspin::read_options() {
     local config name value
 
@@ -121,6 +121,11 @@ sendspin::read_options() {
             exit 1
         fi
     fi
+
+    if [ -n "${SENDSPIN_SERVER}" ] && ! sendspin::server_is_mdns "${SENDSPIN_SERVER}"; then
+        sendspin::log 'SENDSPIN_SERVER (add-on option: server) no longer accepts a host, host:port or URL. Leave it empty to let Music Assistant discover this player, or use mdns: for any server or mdns:<name> for a named server.'
+        exit 1
+    fi
 }
 
 # Whether this container runs its own dbus and avahi-daemon, recorded once by
@@ -136,9 +141,6 @@ sendspin::decide_daemons() {
     if [ -S "${SYSTEM_BUS_SOCKET}" ]; then
         printf 'no\n' > "${SENDSPIN_DAEMON_DECISION}"
         sendspin::log "Host D-Bus socket present at ${SYSTEM_BUS_SOCKET}: advertising through the host's Avahi, the bundled dbus and avahi-daemon stay down."
-    elif [ -n "${SENDSPIN_SERVER}" ] && ! sendspin::server_is_mdns "${SENDSPIN_SERVER}"; then
-        printf 'no\n' > "${SENDSPIN_DAEMON_DECISION}"
-        sendspin::log 'A fixed server is configured, which suppresses the mDNS advertisement: the bundled dbus and avahi-daemon stay down.'
     elif [ -n "${SENDSPIN_SERVER}" ]; then
         printf 'yes\n' > "${SENDSPIN_DAEMON_DECISION}"
         sendspin::log 'Starting the bundled dbus and avahi-daemon: the mdns: server value needs mDNS to resolve the server.'
@@ -209,8 +211,7 @@ sendspin::warn_if_output_changed_meaning() {
     sendspin::log "The output ${SENDSPIN_OUTPUT} now selects this player's native ${server} backend rather than ALSA's ${SENDSPIN_OUTPUT} plugin PCM, which it used to mean; alsa:${SENDSPIN_OUTPUT} is that previous behaviour."
 }
 
-# The mdns: prefix is reserved before the first colon in upstream's -s grammar;
-# everything else is a host, host:port or ws URL.
+# Upstream's -s accepts only mdns: followed by an optional server name.
 sendspin::server_is_mdns() {
     [ "${1#mdns:}" != "$1" ]
 }

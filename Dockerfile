@@ -1,8 +1,8 @@
 # The player lives upstream and is built here from a pinned ref; this repo never
 # forks it. Bump both ARGs together: the SHA is checked against the clone, so a
 # repointed tag fails the build instead of quietly shipping different code.
-ARG SENDSPIN_CLI_REF=v0.1.6
-ARG SENDSPIN_CLI_SHA=6b20f8582ffe7ff4fe467d5c4cd23dea0264a835
+ARG SENDSPIN_CLI_REF=v0.2.0
+ARG SENDSPIN_CLI_SHA=e980128a9c37229cbc28c764e9f2fd65d1c5edb6
 
 # ghcr.io/home-assistant/amd64-base-debian:trixie, which ships s6-overlay v3 and
 # bashio. CI overrides this with the digest for the architecture it is building;

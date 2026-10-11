@@ -49,11 +49,17 @@ If you need exclusive, bit-perfect access to a DAC, run the container version of
 this player instead of the app. See the
 [repository README](https://github.com/music-assistant/local-audio-addon).
 
-## Connecting to one specific server
+## Discovering a server instead
 
-Leave **Music Assistant server** empty unless discovery genuinely does not work.
-Setting it makes the player dial out to that address instead of waiting to be
-found, and **stops it being discoverable** at the same time.
+Leave **Music Assistant server** empty for normal operation: Music Assistant
+discovers this player. To have the player discover a server instead, set it to
+`mdns:` for any server or `mdns:<name>` for a specific advertised server name,
+for example `mdns:Music Assistant`. This **stops the player being discoverable**.
+
+Hosts, `host:port` addresses and URLs are no longer accepted. If you previously
+configured an address, the app stops with an error until you clear the setting
+or replace it with an `mdns:` value. Both modes require working mDNS; this option
+does not work around blocked multicast.
 
 Both the player and the server still have to be on the same local network for
 audio to work. This setting is not a way to reach a server across a VPN or

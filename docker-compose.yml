@@ -90,9 +90,10 @@ services:
       # command that quietly did nothing would be a hard one to work out.
       # SENDSPIN_HOOK_START: curl -fsS -X POST http://192.168.1.20/relay/0?turn=on
       # SENDSPIN_HOOK_STOP: curl -fsS -X POST http://192.168.1.20/relay/0?turn=off
-      # Dial out to one specific server instead of waiting to be discovered.
-      # Any value here suppresses the mDNS advertisement.
-      # SENDSPIN_SERVER: 192.168.1.10:8927
+      # Discover a server instead of waiting to be discovered.
+      # Use "mdns:" for any server or "mdns:<name>" for a named server.
+      # This suppresses the player's advertisement; hosts and URLs are not supported.
+      # SENDSPIN_SERVER: "mdns:Music Assistant"
 
 volumes:
   local-audio-data:

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+Built on `sendspin-cli` v0.2.0, and through it `sendspin-cpp` v0.8.0.
+
+- Breaking: the `server` option no longer accepts hosts, host:port addresses or
+  URLs. Clear an existing address to let Music Assistant discover this player,
+  or use `mdns:` for any server or `mdns:<name>` for a named server. Invalid
+  settings stop the app with migration guidance without logging the value.
+- Server discovery needs Avahi and D-Bus too: the bundled daemons start for
+  every supported connection mode unless the host's D-Bus socket is mounted.
+- Includes upstream fixes for playback synchronization after audio-device recovery.
+
 ## 0.1.13
 
 Built on `sendspin-cli` v0.1.6, and through it `sendspin-cpp` v0.7.2.

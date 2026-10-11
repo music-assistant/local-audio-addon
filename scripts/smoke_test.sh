@@ -91,7 +91,7 @@ readonly APPARMOR_SOURCE="$SCRIPT_DIR/../local_audio/apparmor.txt"
 readonly PLAYER_NAME='Smoke Test Player'
 readonly PLAYER_LOG_LEVEL=debug
 
-# TEST-NET-1 (RFC 5737), so a dial-out player has somewhere to aim that no real host answers.
+# Legacy address values must be refused without echoing credentials.
 readonly UNREACHABLE_SERVER=192.0.2.1:8927
 readonly CREDENTIALLED_SERVER='ws://user:s3cr3t@192.0.2.1:8927/sendspin'
 readonly CREDENTIAL=s3cr3t
@@ -113,10 +113,6 @@ readonly SUPERVISOR_TOKEN=smoke-supervisor-token
 # relay's `curl` would need and what the profile's one exec rule has to cover as well.
 # shellcheck disable=SC2016  # $SENDSPIN_EVENT is for the hook's shell, not for this one.
 readonly HOOK_COMMAND='/usr/bin/printf "the %s hook ran\n" "$SENDSPIN_EVENT"'
-
-# The alias a player reaches the stand-in server on, resolved to the host with --add-host. The
-# stand-in binds a port the OS picks, which lands in SERVER_PORT when it starts.
-readonly SERVER_HOST=sendspin-server
 
 # `supervisor` is the host the real Supervisor answers on, and the one bashio's default URL
 # names. Only the port is test-specific -- the stand-in cannot have 80 on the runner -- so
@@ -177,7 +173,6 @@ SUPERVISOR_PID=''
 SUPERVISOR_PORT=''
 SUPERVISOR_MARKER=''
 SERVER_PID=''
-SERVER_PORT=''
 SERVER_MARKER=''
 CHECKS=0
 
@@ -224,7 +219,6 @@ stop_server() {
         wait "$SERVER_PID" 2>/dev/null || true
     fi
     SERVER_PID=''
-    SERVER_PORT=''
     SERVER_MARKER=''
 }
 
@@ -412,18 +406,6 @@ assert_process() {
     pass "$what"
 }
 
-refute_process() {
-    local container=$1 name=$2 what=$3
-    local path
-    path=$(processes_of "$container")
-    if grep -F -e "$name" "$path" >/dev/null; then
-        printf '\n---- container processes ----\n' >&2
-        cat "$path" >&2
-        fail "$what -- '$name' is running and should not be"
-    fi
-    pass "$what"
-}
-
 # ==============================================================================
 # The stand-in Supervisor
 # ==============================================================================
@@ -496,38 +478,42 @@ assert_supervisor_requests() {
 # ==============================================================================
 #
 # Only the stream-hook checks need one. Every other check here is about a player that has been
-# started and configured, which needs no server at all -- and the two connection-mode checks
-# deliberately aim at an address nothing answers on.
+# started and configured, which needs no server at all.
 
-# Starts the stand-in on a port the OS picks and leaves it in SERVER_PORT. The player is pointed
-# at it by `server=$SERVER_HOST:$SERVER_PORT`, which start_player turns into an --add-host.
+# Connects the stand-in to the player's randomly published loopback port. The player keeps its
+# default inbound connection mode; fixed server addresses are no longer supported player options.
 start_server() {
     local log="$WORK_DIR/server.log"
-    local waited=0
+    local waited=0 address port
 
     stop_server
     SERVER_MARKER="$WORK_DIR/server-connections-${CHECKS}"
     : >"$log"
 
-    python3 "$FAKE_SERVER" --marker "$SERVER_MARKER" >"$log" 2>&1 &
+    address=$(docker port "$PLAYER" 8928/tcp) || fail 'could not read the published player port'
+    port=${address##*:}
+    [[ "$address" == 127.0.0.1:* && "$port" =~ ^[0-9]+$ ]] ||
+        fail "unexpected published player address: $address"
+    python3 "$FAKE_SERVER" --port "$port" --connect-timeout "$BOOT_TIMEOUT_S" \
+        --marker "$SERVER_MARKER" >"$log" 2>&1 &
     SERVER_PID=$!
 
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
-        if grep -F -e 'listening on port ' "$log" >/dev/null 2>&1; then
-            SERVER_PORT=$(sed -n 's/.*listening on port \([0-9]*\).*/\1/p' "$log" | head -1)
-            [ -n "$SERVER_PORT" ] || fail 'the stand-in server printed no port'
+        if grep -F -x -e 'client-hello' "$SERVER_MARKER" >/dev/null 2>&1; then
             return 0
         fi
         if ! kill -0 "$SERVER_PID" 2>/dev/null; then
             cat "$log" >&2
-            fail 'the stand-in server died before it was listening'
+            show_logs "$PLAYER"
+            fail 'the stand-in server died before the player handshake completed'
         fi
         sleep 0.1
         waited=$((waited + 1))
     done
 
     cat "$log" >&2
-    fail 'the stand-in server never reported a port'
+    show_logs "$PLAYER"
+    fail 'the stand-in server never completed the player handshake'
 }
 
 # That the stand-in got as far as `outcome` with the player under test. It is what keeps the
@@ -609,14 +595,12 @@ start_player() {
     args=(--detach --name "$PLAYER")
 
     # Any non-empty `stream=` asks for a player a stream will actually run on, which is a
-    # stand-in server to dial out to. It is spelled as a want rather than as a server value for
-    # the same reason every other pair here is: the check says what it needs, not how it is
-    # wired up. Presence rather than value, as `apparmor=` beside it also is.
+    # stand-in server connecting to its published port. It is spelled as a want rather than as a
+    # server value for the same reason every other pair here is: the check says what it needs,
+    # not how it is wired up. Presence rather than value, as `apparmor=` beside it also is.
     if [ -n "$stream" ]; then
-        [ -z "$server" ] || fail 'start_player: stream= and server= both name a server'
-        start_server
-        server="${SERVER_HOST}:${SERVER_PORT}"
-        args+=(--add-host "${SERVER_HOST}:host-gateway")
+        [ -z "$server" ] || fail 'start_player: stream= needs the default inbound connection mode'
+        args+=(--publish '127.0.0.1::8928')
     fi
 
     # The one argument here that is not a player option: it is a `docker run` flag, and it is
@@ -651,6 +635,11 @@ start_player() {
 
     CONTAINERS+=("$PLAYER")
     docker run "${args[@]}" "$IMAGE" >/dev/null || fail "could not start $IMAGE"
+    if [ -n "$stream" ]; then
+        # Docker's proxy can accept TCP before the player listens, then reset the upgrade.
+        assert_log "$PLAYER" 'listening on port 8928' 'the stream player came up on its port'
+        start_server
+    fi
 }
 
 # Waits for Docker to report the container healthy, or `limit` seconds pass. This is the
@@ -973,84 +962,63 @@ check_default_name() {
         'and that is the name the rendered config carries'
 }
 
-# An `mdns:` server is the third of the four daemon decisions and the odd one out: a server is
-# configured, so the player does not advertise, and yet the daemons are needed anyway because
-# mDNS is how that server's name gets resolved. Leaving them down here would give a player that
-# can never find the thing it was told to connect to.
+# With an `mdns:` server configured, the player does not advertise, but the daemons are needed
+# because mDNS is how that server's name gets resolved. Leaving them down here would give a
+# player that can never find the thing it was told to connect to.
 check_mdns_server_mode() {
-    local container
-    step 'mDNS-resolved server'
-    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'server=mdns:Living Room'
+    local server=$1 container
+    step "mDNS-resolved server ($server)"
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "server=$server"
     container=$PLAYER
 
     assert_log "$container" \
         'Starting the bundled dbus and avahi-daemon: the mdns: server value needs mDNS to resolve the server.' \
         'the daemon decision is recorded and says to start them for the lookup'
     assert_log "$container" \
-        'Resolving the Music Assistant server over mDNS (mdns:Living Room); this player is not advertised.' \
+        "Resolving the Music Assistant server over mDNS ($server); this player is not advertised." \
         'the connection mode is logged as resolving over mDNS'
     assert_log "$container" 'listening on port 8928' 'the player came up on its port'
     assert_process "$container" avahi-daemon 'the bundled avahi-daemon is running for the lookup'
-    refute_log "$container" 'mdns: advertising _sendspin._tcp' \
-        'the player advertises nothing when it has a server to reach'
-
-    assert_clean_stop "$container"
-}
-
-# A fixed server suppresses the mDNS advertisement, which makes the bundled daemons dead weight
-# -- so they are never started, and the health check must not go asking for one that is not
-# there. The server is unreachable on purpose: what is under test is the decision, not a
-# handshake.
-check_dial_out_mode() {
-    local container
-    step 'dial-out mode'
-    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "server=$UNREACHABLE_SERVER"
-    container=$PLAYER
-
-    assert_log "$container" \
-        'A fixed server is configured, which suppresses the mDNS advertisement: the bundled dbus and avahi-daemon stay down.' \
-        'the daemon decision is recorded and says to keep them down'
-    assert_log "$container" "Dialling out to ${UNREACHABLE_SERVER}; this player is not advertised." \
-        'the connection mode is logged as dialling out'
-
-    wait_for_healthcheck "$container" "$BOOT_TIMEOUT_S" || {
-        show_logs "$container"
-        fail 'the health check never passed in dial-out mode'
-    }
-    pass 'the health check passes without a bundled avahi to ask'
-
-    assert_config_line "$container" "^server = ${UNREACHABLE_SERVER}\$" \
-        'the server reached the rendered config'
+    assert_process "$container" dbus-daemon 'the bundled dbus-daemon is running for the lookup'
+    assert_config_line "$container" "^server = ${server}\$" \
+        'the discovery selector reached the rendered config intact'
+    assert_log "$container" 'Looking for a Sendspin server on _sendspin-server._tcp' \
+        'the player started browsing for a server'
     assert_log "$container" 'mdns: Not advertising _sendspin._tcp' \
         'the player says it is not advertising, and why'
     refute_log "$container" 'mdns: advertising _sendspin._tcp' \
-        'the player advertises nothing when it has a server to dial'
-    refute_process "$container" avahi-daemon 'no avahi-daemon is running'
-    refute_process "$container" dbus-daemon 'no dbus-daemon is running'
+        'the player advertises nothing when it has a server to reach'
 
+    wait_for_healthcheck "$container" "$BOOT_TIMEOUT_S" || {
+        show_logs "$container"
+        fail 'the health check never passed in server discovery mode'
+    }
+    pass 'the health check passes while looking for a server'
     assert_clean_stop "$container"
 }
 
-# A server value can carry credentials, and the connection-mode line is the first thing that gets
-# pasted into a support thread -- so that line is written with the userinfo stripped out.
-#
-# That line only. The player logs the URL it was handed in full, at info level, and that is
-# upstream behaviour in a component this repo builds rather than owns; asserting the credential
-# appears nowhere in the log would be asserting something this image cannot deliver. What it can
-# deliver is its own line, and a config file only root can read.
-check_credentials_are_kept_out_of_the_mode_line() {
-    local container
-    step 'credentials in a server value'
-    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "server=$CREDENTIALLED_SERVER"
+# Old address settings fail before starting either the daemons or the player, with migration
+# guidance that never echoes the rejected value, even when it carries credentials.
+check_invalid_server() {
+    local server=$1 container
+    step 'unsupported server value'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "server=$server"
     container=$PLAYER
 
+    wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+        show_logs "$container"
+        fail 'an unsupported server value left the container running'
+    }
+    assert_exit_code "$container" 1 'an unsupported server value stops the container'
     assert_log "$container" \
-        'Dialling out to ws://192.0.2.1:8927/sendspin; this player is not advertised.' \
-        'the connection mode is logged with the userinfo stripped'
-    refute_log "$container" "Dialling out to ws://user:${CREDENTIAL}" \
-        'the line this image writes carries no credentials'
-    assert_config_line "$container" "^server = ${CREDENTIALLED_SERVER}\$" \
-        'the credentials still reach the player, which needs them'
+        'SENDSPIN_SERVER (add-on option: server) no longer accepts a host, host:port or URL.' \
+        'the log explains why the server setting was refused'
+    assert_log "$container" \
+        'Leave it empty to let Music Assistant discover this player, or use mdns: for any server or mdns:<name> for a named server.' \
+        'the log explains how to migrate'
+    refute_log "$container" "$CREDENTIAL" 'no credentials appear anywhere in the log'
+    refute_log "$container" 'listening on port 8928' 'no player was started'
+    refute_log "$container" 'Starting the bundled' 'no bundled daemons were requested'
 }
 
 # An option value that would rewrite the configuration rather than fill it in: a newline turns
@@ -1314,8 +1282,7 @@ check_confined_stop() {
 #
 # Running one needs a stream, and a stream needs a server, which is what scripts/fake_server.py
 # is. Nothing else in this suite has ever needed one: every other check is about a player that
-# has been configured and started, and the two connection-mode checks deliberately aim at an
-# address nothing answers on.
+# has been configured and started without needing a server connection.
 check_stream_hooks() {
     local container
 
@@ -1335,7 +1302,7 @@ check_stream_hooks() {
 
     # Logged after the config is written and before the player is exec'd, so it is what makes
     # the two reads below race-free rather than a guess at how far the start has got.
-    assert_log "$container" 'Dialling out to' \
+    assert_log "$container" 'over mDNS, waiting for a Music Assistant server to connect.' \
         'the player was started, so its config has been rendered'
     assert_config_line "$container" '^hook-start = ' \
         'the start hook reached the rendered config under the key the player reads'
@@ -1491,9 +1458,13 @@ main() {
 
     check_advertise_mode
     check_default_name
-    check_mdns_server_mode
-    check_dial_out_mode
-    check_credentials_are_kept_out_of_the_mode_line
+    check_mdns_server_mode 'mdns:'
+    check_mdns_server_mode 'mdns:Living Room'
+    check_invalid_server 'music-assistant.local'
+    check_invalid_server "$UNREACHABLE_SERVER"
+    check_invalid_server 'ws://192.0.2.1:8927/sendspin'
+    check_invalid_server "$CREDENTIALLED_SERVER"
+    check_invalid_server 'mdns'
     check_newline_in_an_option
     check_output_names_that_changed_meaning
     check_output_names_that_did_not

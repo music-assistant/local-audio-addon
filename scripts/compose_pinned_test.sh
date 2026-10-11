@@ -98,7 +98,7 @@ check_the_shipped_compose_file() {
     local line
     for line in 'network_mode: host' '- /dev/snd:/dev/snd' \
         '# - /var/run/dbus:/var/run/dbus:ro' 'SENDSPIN_OUTPUT: default' \
-        '# SENDSPIN_SERVER: 192.168.1.10:8927'; do
+        '# SENDSPIN_SERVER: "mdns:Music Assistant"'; do
         if printf '%s\n' "$pinned" | grep -qF -- "$line"; then
             pass "the asset still carries '$line'"
         else
