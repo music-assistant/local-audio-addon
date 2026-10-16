@@ -15,8 +15,8 @@ configuration:
       Leave this empty and the player waits to be found over mDNS, which is what
       you want. Set it to a host, host:port or ws:// URL only if the server
       cannot discover the player by itself — doing so also stops the player
-      being discoverable. A user name or password in it stops the app: Sendspin
-      never uses one, and it would end up in the log.
+      being discoverable. Do not put a password in here; it is stored and shown
+      as plain text.
   buffer_ms:
     name: Audio buffer
     description: >-

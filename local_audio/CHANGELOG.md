@@ -14,10 +14,8 @@ Built on `sendspin-cli` v0.3.0, and through it `sendspin-cpp` v0.8.0.
   after recovering it ran early and drifted in and out of sync with the group.
 - A **Music Assistant server** value that is not a valid host, host:port,
   `ws://` URL or `mdns:` name now stops the app at startup with an error, rather
-  than starting a player that can never connect.
-- A **Music Assistant server** value carrying a user name or password stops the
-  app. Sendspin never used them, and the player printed the whole address,
-  credentials included, in its log.
+  than starting a player that can never connect. The error does not repeat any
+  credentials the value carried.
 
 ## 0.1.13
 

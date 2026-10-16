@@ -22,9 +22,8 @@ sendspin::log() {
 # SENDSPIN_HOOK_STOP. Only the source differs between an add-on and a plain
 # container; the defaults below are applied to both so the two cannot drift.
 #
-# Stops the container on a value that would inject configuration keys, on a
-# buffer the player would reject, and on a server carrying credentials, rather
-# than returning any of them to the caller.
+# Stops the container on a value that would inject configuration keys, and on a
+# buffer the player would reject, rather than returning either to the caller.
 sendspin::read_options() {
     local config name value
 
@@ -122,14 +121,6 @@ sendspin::read_options() {
             exit 1
         fi
     fi
-
-    # Userinfo authenticates nothing -- upstream drops it before the handshake --
-    # but the player's library logs the URL it dials in full, at info level. So
-    # it is refused rather than passed on, and the refusal does not quote it.
-    if sendspin::server_has_userinfo "${SENDSPIN_SERVER}"; then
-        sendspin::log 'SENDSPIN_SERVER (add-on option: server) carries a user name or password, which Sendspin never uses and the player would print in its log. Remove everything up to and including the @.'
-        exit 1
-    fi
 }
 
 # Whether this container runs its own dbus and avahi-daemon, recorded once by
@@ -222,14 +213,6 @@ sendspin::warn_if_output_changed_meaning() {
 # everything else is a host, host:port or ws URL.
 sendspin::server_is_mdns() {
     [ "${1#mdns:}" != "$1" ]
-}
-
-# An @ in the authority: after any scheme, before the first slash. An mdns: name
-# is a label rather than an address, so an @ in it is just a character.
-sendspin::server_has_userinfo() {
-    local authority=${1#*://}
-    authority=${authority%%/*}
-    ! sendspin::server_is_mdns "$1" && [ "${authority}" != "${authority#*@}" ]
 }
 
 # A server value may carry userinfo, and the connection-mode line is the first

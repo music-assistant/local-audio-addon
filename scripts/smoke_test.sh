@@ -1031,28 +1031,26 @@ check_dial_out_mode() {
     assert_clean_stop "$container"
 }
 
-# Userinfo in a server value authenticates nothing, and the player logs the URL it dials in full,
-# so the only way to keep a credential out of the log is never to hand it to the player. Both
-# spellings upstream accepts are tried: a URL, and a bare user:password@host:port.
-check_credentials_are_refused() {
-    local container server
+# A server value can carry credentials, and the connection-mode line is the first thing that gets
+# pasted into a support thread -- so that line is written with the userinfo stripped out.
+#
+# That line only. The player logs the URL it was handed in full, at info level, and that is
+# upstream behaviour in a component this repo builds rather than owns; asserting the credential
+# appears nowhere in the log would be asserting something this image cannot deliver. What it can
+# deliver is its own line, and a config file only root can read.
+check_credentials_are_kept_out_of_the_mode_line() {
+    local container
+    step 'credentials in a server value'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "server=$CREDENTIALLED_SERVER"
+    container=$PLAYER
 
-    for server in "$CREDENTIALLED_SERVER" "user:${CREDENTIAL}@${UNREACHABLE_SERVER}"; do
-        step 'credentials in a server value'
-        start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "server=$server"
-        container=$PLAYER
-
-        wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
-            show_logs "$container"
-            fail 'a server carrying credentials left the container running'
-        }
-        assert_exit_code "$container" 1 'a server carrying credentials stops the container'
-        assert_log "$container" \
-            'SENDSPIN_SERVER (add-on option: server) carries a user name or password' \
-            'the log says why the server was refused'
-        refute_log "$container" "$CREDENTIAL" 'no credentials appear anywhere in the log'
-        refute_log "$container" 'listening on port 8928' 'no player was started'
-    done
+    assert_log "$container" \
+        'Dialling out to ws://192.0.2.1:8927/sendspin; this player is not advertised.' \
+        'the connection mode is logged with the userinfo stripped'
+    refute_log "$container" "Dialling out to ws://user:${CREDENTIAL}" \
+        'the line this image writes carries no credentials'
+    assert_config_line "$container" "^server = ${CREDENTIALLED_SERVER}\$" \
+        'the credentials still reach the player, which needs them'
 }
 
 # An option value that would rewrite the configuration rather than fill it in: a newline turns
@@ -1495,7 +1493,7 @@ main() {
     check_default_name
     check_mdns_server_mode
     check_dial_out_mode
-    check_credentials_are_refused
+    check_credentials_are_kept_out_of_the_mode_line
     check_newline_in_an_option
     check_output_names_that_changed_meaning
     check_output_names_that_did_not
