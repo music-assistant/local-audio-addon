@@ -973,6 +973,25 @@ check_default_name() {
         'and that is the name the rendered config carries'
 }
 
+# The output nobody chose. The add-on always has Home Assistant's PulseAudio and reaches it
+# natively, sidestepping the ALSA pulse plugin's busy loop (#37); Compose may have no sound
+# server at all, so it stays on ALSA's default.
+check_default_output() {
+    local container expected=default
+    [ "$MODE" = addon ] && expected=pulse
+
+    step 'the default output'
+    start_player "log_level=$PLAYER_LOG_LEVEL"
+    container=$PLAYER
+
+    assert_log "$container" 'over mDNS, waiting for a Music Assistant server to connect.' \
+        'the player was started, so its config has been rendered'
+    assert_config_line "$container" "^output = ${expected}\$" \
+        "an unset output renders as ${expected} in ${MODE} mode"
+    refute_log "$container" 'now selects this player' \
+        'and nobody is told a name they never wrote changed meaning'
+}
+
 # An `mdns:` server is the third of the four daemon decisions and the odd one out: a server is
 # configured, so the player does not advertise, and yet the daemons are needed anyway because
 # mDNS is how that server's name gets resolved. Leaving them down here would give a player that
@@ -1209,18 +1228,26 @@ check_output_names_that_changed_meaning() {
         start_player "output=$backend" "log_level=$PLAYER_LOG_LEVEL"
         container=$PLAYER
 
-        assert_log "$container" \
-            "The output ${backend} now selects this player's native ${server} backend" \
-            "the log says ${backend} now means the native ${server} backend"
-        assert_log "$container" "alsa:${backend} is that previous behaviour." \
-            "and names alsa:${backend} as the way back to what it used to mean"
-
         # Logged immediately after the config is written and before the player is exec'd, so it
         # is what makes the read below race-free without waiting on the player's own fate.
         assert_log "$container" 'over mDNS, waiting for a Music Assistant server to connect.' \
             'the player was started, so its config has been rendered'
         assert_config_line "$container" "^output = ${backend}\$" \
             "the value reached the config unaltered rather than rewritten to alsa:${backend}"
+
+        # Compose users wrote the name themselves; the add-on chooses `pulse` on its own, so
+        # telling its users the name changed meaning would be telling them about nothing. The
+        # refusal comes after the line above, which is logged after the warning would have been.
+        if [ "$MODE" = addon ]; then
+            refute_log "$container" 'now selects this player' \
+                "the add-on is told nothing about ${backend} changing meaning"
+        else
+            assert_log "$container" \
+                "The output ${backend} now selects this player's native ${server} backend" \
+                "the log says ${backend} now means the native ${server} backend"
+            assert_log "$container" "alsa:${backend} is that previous behaviour." \
+                "and names alsa:${backend} as the way back to what it used to mean"
+        fi
     done
 }
 
@@ -1491,6 +1518,7 @@ main() {
 
     check_advertise_mode
     check_default_name
+    check_default_output
     check_mdns_server_mode
     check_dial_out_mode
     check_credentials_are_kept_out_of_the_mode_line

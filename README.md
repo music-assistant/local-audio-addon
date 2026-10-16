@@ -198,9 +198,9 @@ the same server by a different route. The player says so in its log at every
 start. Nothing needs changing to keep working, and `alsa:pulse` and
 `alsa:pipewire` are the way back to the old behaviour if you want it.
 
-The Home Assistant app is unaffected: it offers no output option, so no value
-set there can have changed meaning. Were one to arrive from somewhere else, the
-same log line covers it — the check is on the value, not on where it came from.
+The Home Assistant app is unaffected: it offers no output option, and the
+`pulse` it plays to is its own choice rather than a name a user wrote, so it
+logs no such line.
 
 ## Discovery, Avahi and D-Bus
 
@@ -301,15 +301,15 @@ machine. Naming an output at all is therefore a Compose-only capability — `hw:
 and `plughw:` PCMs, and the `pulse` and `pipewire` backends alike — which is the
 reason to run the container rather than the app for an exclusively-held DAC.
 
-The app reaches Home Assistant's PulseAudio through ALSA's plugin PCM rather
-than through the native `pulse` backend, and stays there. That bridge is what
-`default` means under the `/etc/asound.conf` the Supervisor renders, it is what
-the app's AppArmor profile grants, and it is what the silent-output check below
-reads its sink from — libpulse substitutes the *client* default for the plugin's
-NULL device, which is why that check reads `default-sink` from `client.conf`.
-The native backend would name its own sink and leave the check reporting on one
-the player is not using. Nothing about the current path is broken, so it is left
-alone.
+The app reaches Home Assistant's PulseAudio through the native `pulse` backend.
+Up to 0.2.0 it went through ALSA's pulse plugin instead, which is what `default`
+means under the `/etc/asound.conf` the Supervisor renders, and that plugin can
+leave a poll pipe full with nothing to drain it and spin a core at 100% until
+the app restarts
+([#37](https://github.com/music-assistant/local-audio-addon/issues/37)). A bare
+`pulse` names no sink, so libpulse plays to the *client* default exactly as it
+did for the plugin's NULL device: the `default-sink` the Audio panel writes into
+`client.conf`, which is also what the silent-output check below reads.
 
 The app also reads that PulseAudio sink once at start and names it in the log,
 with its level and the port it is routed to. If the sink is muted or at zero it

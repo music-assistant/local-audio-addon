@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- The player talks to Home Assistant's audio system directly instead of through
+  an ALSA compatibility layer. That layer could get stuck after a stream started
+  and keep one CPU core at 100% while the music played on, until the app was
+  restarted. The output is still chosen in the app's **Audio** panel, as before.
+
 ## 0.2.0
 
 Built on `sendspin-cli` v0.3.0, and through it `sendspin-cpp` v0.8.0.
