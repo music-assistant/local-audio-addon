@@ -30,17 +30,15 @@ what it finds there: a check whose player never connected would otherwise assert
 of a hook's output and pass.
 
 Runs on the host rather than in a container of its own, the way scripts/fake_supervisor.py
-does. It initiates a WebSocket connection to the player's published port: the Sendspin server
-is the WebSocket client, and the player needs no fixed-address server option.
+does; the container under test reaches it through `--add-host`.
 """
 
 import argparse
 import base64
 import hashlib
 import json
-import os
 import select
-import socket
+import socketserver
 import struct
 import time
 
@@ -84,14 +82,8 @@ def parse_args():
     parser.add_argument(
         "--port",
         type=int,
-        required=True,
-        help="the player's published WebSocket port on localhost",
-    )
-    parser.add_argument(
-        "--connect-timeout",
-        type=float,
-        default=60,
-        help="seconds to wait for the player to start listening",
+        default=0,
+        help="port to listen on; 0 lets the OS choose a free one",
     )
     return parser.parse_args()
 
@@ -128,7 +120,8 @@ def receive_frame(connection):
             return None
         length = struct.unpack("!H" if width == 2 else "!Q", extended)[0]
 
-    # The peer controls the declared length. Nothing the player sends comes near this bound.
+    # Capped for the reason the handshake read is: this binds 0.0.0.0, and a declared length is
+    # a number anything that connects can choose. Nothing the player sends comes near it.
     if length > MAX_FRAME_BYTES:
         log(f"refusing a frame declaring {length} bytes")
         return None
@@ -148,88 +141,81 @@ def receive_frame(connection):
 
 
 def send_frame(connection, opcode, payload):
-    """One masked frame: this Sendspin server is the WebSocket client.
+    """One unmasked frame. A server never masks, which is the whole of the difference.
 
     The two-byte length is the widest this encodes, which is MAX_FRAME_BYTES above.
     """
     header = bytearray([0x80 | opcode])
     length = len(payload)
     if length < 126:
-        header.append(0x80 | length)
+        header.append(length)
     else:
-        header.append(0x80 | 126)
+        header.append(126)
         header.extend(struct.pack("!H", length))
-    mask = os.urandom(4)
-    payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
-    connection.sendall(bytes(header) + mask + payload)
+    connection.sendall(bytes(header) + payload)
 
 
 def send_message(connection, message):
     send_frame(connection, OPCODE_TEXT, json.dumps(message).encode())
 
 
-def complete_handshake(connection, port):
-    """Requests and verifies an upgrade without consuming any following WebSocket frame."""
-    key = base64.b64encode(os.urandom(16)).decode()
-    connection.sendall(
-        (
-            "GET /sendspin HTTP/1.1\r\n"
-            f"Host: 127.0.0.1:{port}\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {key}\r\n"
-            "Sec-WebSocket-Version: 13\r\n\r\n"
-        ).encode()
-    )
+def complete_handshake(connection):
+    """Answers the WebSocket upgrade, or returns False having answered nothing."""
     buffer = b""
     while b"\r\n\r\n" not in buffer:
-        # The player may send client/hello in the same packet as the upgrade response.
-        chunk = connection.recv(1)
+        chunk = connection.recv(4096)
         if not chunk:
             return False
         buffer += chunk
+        # A request this long is not the player's, and reading on would be a way for anything
+        # that connects to this port to hold it open.
         if len(buffer) > 16384:
             return False
 
-    lines = buffer.decode("latin-1").split("\r\n")
-    if lines[0].split()[:2] != ["HTTP/1.1", "101"]:
-        return False
-    headers = {}
-    for line in lines[1:]:
+    key = None
+    for line in buffer.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")[1:]:
         name, separator, value = line.partition(":")
-        if separator:
-            headers[name.strip().lower()] = value.strip()
+        if separator and name.strip().lower() == "sec-websocket-key":
+            key = value.strip()
+    if key is None:
+        return False
+
     accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
-    return (
-        headers.get("sec-websocket-accept") == accept
-        and headers.get("upgrade", "").lower() == "websocket"
-        and "upgrade" in [
-            token.strip().lower() for token in headers.get("connection", "").split(",")
-        ]
+    connection.sendall(
+        (
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Accept: {accept}\r\n"
+            "\r\n"
+        ).encode()
     )
+    return True
 
 
 def now_us():
     return time.monotonic_ns() // 1000
 
 
-class PlayerSession:
+class Handler(socketserver.BaseRequestHandler):
     """One player connection: handshake, hello, stream, end, then read until it goes."""
 
-    def __init__(self, marker, port):
-        self.marker = marker
-        self.port = port
-
     def record(self, outcome):
-        with open(self.marker, "a", encoding="utf-8") as handle:
+        with open(self.server.marker, "a", encoding="utf-8") as handle:
             handle.write(outcome + "\n")
+
+    def handle(self):
+        try:
+            self.serve(self.request)
+        except (OSError, ValueError) as error:
+            log(f"connection ended: {error}")
 
     def serve(self, connection):
         connection.settimeout(FRAME_TIMEOUT_S)
-        if not complete_handshake(connection, self.port):
+        if not complete_handshake(connection):
             self.record("no-websocket-handshake")
             log("a connection did not complete the WebSocket handshake")
-            raise ValueError("the player refused the WebSocket upgrade")
+            return
 
         # Sent without waiting for the client/hello: the player's handshake completes when its
         # own hello has gone out and this one has arrived, in either order.
@@ -302,30 +288,27 @@ class PlayerSession:
                 ends_at = time.monotonic() + STREAM_MS / 1000
 
 
+class Server(socketserver.ThreadingTCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+    # Named so the handler, which is instantiated per connection, reads it off the server it
+    # already has rather than off a global.
+    marker = None
+
+
 def main():
     args = parse_args()
 
-    deadline = time.monotonic() + args.connect_timeout
-    while True:
-        try:
-            connection = socket.create_connection(
-                ("127.0.0.1", args.port), timeout=FRAME_TIMEOUT_S
-            )
-            break
-        except OSError as error:
-            if time.monotonic() >= deadline:
-                log(f"could not connect to the player: {error}")
-                return 1
-            time.sleep(POLL_S)
+    # 0.0.0.0 for the reason the stand-in Supervisor binds it: the point of this is to be
+    # reachable from a container, whose host-gateway address is not the loopback one.
+    server = Server(("0.0.0.0", args.port), Handler)
+    server.marker = args.marker
 
-    try:
-        with connection:
-            PlayerSession(args.marker, args.port).serve(connection)
-    except (OSError, ValueError) as error:
-        log(f"connection ended: {error}")
-        return 1
-    return 0
+    # Printed rather than assumed, because --port 0 means the caller does not know it yet.
+    log(f"listening on port {server.server_address[1]}")
+
+    server.serve_forever()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
