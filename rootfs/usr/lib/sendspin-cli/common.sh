@@ -48,6 +48,14 @@ sendspin::read_options() {
         SENDSPIN_BUFFER_MS=$(sendspin::option "${config}" 'buffer_ms')
         SENDSPIN_HOOK_START=$(sendspin::option "${config}" 'hook_start')
         SENDSPIN_HOOK_STOP=$(sendspin::option "${config}" 'hook_stop')
+
+        # Home Assistant's audio is always a PulseAudio server, so the add-on
+        # talks to it natively. `default` reaches the same server through ALSA's
+        # pulse plugin, whose poll pipe can be left full with nothing to drain it,
+        # spinning a core until the add-on restarts (#37). A bare `pulse` names no
+        # sink, so libpulse still plays to the client.conf default-sink the Audio
+        # panel sets.
+        : "${SENDSPIN_OUTPUT:=pulse}"
     fi
 
     # A fixed name rather than the host's: `homeassistant` said nothing about
@@ -199,6 +207,10 @@ sendspin::option() {
 # correct, and should go.
 sendspin::warn_if_output_changed_meaning() {
     local server
+
+    # The add-on picks `pulse` itself; nobody there wrote the name to be told
+    # it changed meaning.
+    [ -z "${SUPERVISOR_TOKEN:-}" ] || return 0
 
     case ${SENDSPIN_OUTPUT} in
         pulse) server=PulseAudio ;;
