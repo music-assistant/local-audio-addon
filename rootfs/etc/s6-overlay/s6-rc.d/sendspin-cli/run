@@ -15,8 +15,7 @@ fi
 
 mkdir -p "${SENDSPIN_STATE_DIR}" "${SENDSPIN_RUN_DIR}"
 
-# Created ahead of the write because a server value can carry credentials, and
-# the file is something a support thread will ask a user to paste.
+# Keep the rendered configuration readable only by root.
 install -m 600 /dev/null "${SENDSPIN_CONF}"
 
 # Only keys that have a value are written. The config parser treats a key's

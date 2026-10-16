@@ -59,8 +59,8 @@ Both the player and the server still have to be on the same local network for
 audio to work. This setting is not a way to reach a server across a VPN or
 through a proxy.
 
-Do not put credentials in this field. It is shown as plain text on the
-configuration page and is included in Home Assistant backups.
+A user name or password in this field stops the app. Sendspin never uses one,
+and the player would print it in its log.
 
 ## If the sound breaks up
 
