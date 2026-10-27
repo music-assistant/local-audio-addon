@@ -45,7 +45,9 @@ it, Home Assistant asks you to confirm the new player and passes the token on
 to Music Assistant, and that one click is the whole of pairing. The log says
 `Published this player to Home Assistant for pairing` when this has happened;
 if the Supervisor could not take it, the log says so and the player carries on
-regardless.
+regardless. The player is offered only until it is paired: the offer is
+withdrawn as soon as a server pairs, a start that finds the player already
+paired makes none, and a player whose pairing is dropped is offered again.
 
 **By hand**, until then, in either of two ways:
 

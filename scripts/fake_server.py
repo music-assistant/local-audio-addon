@@ -24,6 +24,7 @@ output and pass:
     paired        a pairing with the token from --token-file succeeded
     stream-start  audio was committed to the paired player's group
     stream-end    the stream was stopped
+    unpaired      the pairing was dropped again, once --unpair-file appeared
 
 Runs on the host rather than in a container of its own, the way scripts/fake_supervisor.py
 does; the container under test reaches it through `--add-host`.
@@ -65,6 +66,11 @@ def parse_args():
         type=int,
         default=1000,
         help="how long the stream runs before it is stopped",
+    )
+    parser.add_argument(
+        "--unpair-file",
+        help="file whose appearance, after the stream, makes this drop the pairing the way "
+        "a server that forgets a player does",
     )
     return parser.parse_args()
 
@@ -146,6 +152,18 @@ async def run(args):
 
     client.group.stop_stream()
     record("stream-end")
+
+    # No deadline: the suite may replace the player before asking for this.
+    if args.unpair_file:
+        unpair_file = Path(args.unpair_file)
+        while not unpair_file.exists():
+            await asyncio.sleep(POLL_S)
+        await wait_for(
+            lambda: (c := server.get_client(token.client_id)) is not None and c.is_connected,
+            "the player to be connected to unpair it",
+        )
+        await server.unpair(token.client_id)
+        record("unpaired")
 
     # Held open rather than torn down, so the player sees a stream end and not a dropped
     # server. The suite kills this process when the check is done.

@@ -8,6 +8,8 @@ readonly SENDSPIN_STATE_DIR=/data/state
 readonly SENDSPIN_CONTROL_SOCKET=/run/sendspin-cli/control.sock
 readonly SENDSPIN_DAEMON_DECISION=/run/sendspin-cli/bundled-daemons
 readonly SENDSPIN_DISCOVERY_UUID=/run/sendspin-cli/discovery-uuid
+readonly SENDSPIN_DISCOVERY_GRACE_S=20
+readonly SENDSPIN_DISCOVERY_POLL_S=5
 readonly SENDSPIN_PORT=8928
 readonly SYSTEM_BUS_DIR=/var/run/dbus
 readonly SYSTEM_BUS_SOCKET=/var/run/dbus/system_bus_socket
@@ -575,8 +577,57 @@ sendspin::supervisor_api() {
     printf '%s\n' "${SUPERVISOR_API:-http://supervisor}"
 }
 
-# Advisory, so every path returns success. Re-posted on every start, since the
-# Supervisor's message store is not ours to depend on.
+# Offers the player to Home Assistant only while it is unpaired: withdrawn once a
+# server pairs, and offered again if that pairing is lost. Never returns.
+#
+# The player only reports trust for a live connection, and has no field for a
+# pairing it holds while disconnected, so a start waits a bounded grace for one.
+# A paired player that connects later than that is offered, then withdrawn.
+sendspin::watch_discovery() {
+    local status_out='' trust='' offered=0 i
+
+    for ((i = 0; i < SENDSPIN_DISCOVERY_GRACE_S; i++)); do
+        status_out=$(sendspin-cli status --control-socket "${SENDSPIN_CONTROL_SOCKET}" 2> /dev/null) || status_out=''
+        trust=$(sed -n 's/^trust: //p' <<< "${status_out}")
+        if [ "${trust}" = paired ] || [ "${trust}" = unpaired ]; then
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "${trust}" = paired ]; then
+        sendspin::log 'This player is already paired, so it was not offered to Home Assistant.'
+    else
+        sendspin::publish_discovery
+        offered=1
+    fi
+
+    # Offered once per loss of pairing, so a Supervisor that refuses the message
+    # is not asked again every poll.
+    while true; do
+        sleep "${SENDSPIN_DISCOVERY_POLL_S}"
+        status_out=$(sendspin-cli status --control-socket "${SENDSPIN_CONTROL_SOCKET}" 2> /dev/null) || continue
+        trust=$(sed -n 's/^trust: //p' <<< "${status_out}")
+        case ${trust} in
+            paired)
+                if [ -s "${SENDSPIN_DISCOVERY_UUID}" ]; then
+                    sendspin::log 'This player is paired now, so its offer to Home Assistant is withdrawn.'
+                    sendspin::withdraw_discovery 10
+                fi
+                offered=0
+                ;;
+            unpaired)
+                if [ "${offered}" -eq 0 ]; then
+                    sendspin::log 'This player is no longer paired, so it is offered to Home Assistant again.'
+                    sendspin::publish_discovery
+                    offered=1
+                fi
+                ;;
+        esac
+    done
+}
+
+# Advisory, so every path returns success.
 sendspin::publish_discovery() {
     local status_out='' client_id name token payload response uuid
     local i attempt delay=2
@@ -631,17 +682,18 @@ sendspin::publish_discovery() {
     return 0
 }
 
-# Bounded tightly because it runs on the way down, inside the Supervisor's stop
-# grace. A message left behind is harmless: the next start posts it again.
+# Bounded tightly by default because it runs on the way down, inside the
+# Supervisor's stop grace. A message left behind is harmless: the next start
+# posts it again.
 sendspin::withdraw_discovery() {
-    local uuid
+    local max_time=${1:-2} uuid
 
     [ -n "${SUPERVISOR_TOKEN:-}" ] || return 0
     [ -s "${SENDSPIN_DISCOVERY_UUID}" ] || return 0
     uuid=$(cat "${SENDSPIN_DISCOVERY_UUID}")
     rm -f "${SENDSPIN_DISCOVERY_UUID}"
 
-    curl --silent --fail --connect-timeout 1 --max-time 2 --request DELETE \
+    curl --silent --fail --connect-timeout 1 --max-time "${max_time}" --request DELETE \
         --header "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
         "$(sendspin::supervisor_api)/discovery/${uuid}" > /dev/null \
         || sendspin::log 'Warning: could not withdraw the Home Assistant discovery message; the next start replaces it.'

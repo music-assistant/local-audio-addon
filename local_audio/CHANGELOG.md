@@ -16,9 +16,11 @@ it is encrypted.
 - **A server has to pair with it before it can play.** On Home Assistant OS
   this app hands its pairing token to Home Assistant through the Supervisor, so
   once Home Assistant and Music Assistant support it, pairing is one
-  confirmation click. Until then, or if you prefer, pair by hand: the token is
-  in this app's log at startup, or use the 6-digit code the log shows while
-  Music Assistant asks for one. The README covers both.
+  confirmation click. Home Assistant is only asked while the player is
+  unpaired, so a paired player does not prompt again on every restart. Until
+  then, or if you prefer, pair by hand: the token is in this app's log at
+  startup, or use the 6-digit code the log shows while Music Assistant asks
+  for one. The README covers both.
 - A new setting, **Let unpaired servers play**, turns pairing off for this
   player. It is off by default, and best left that way.
 - The pairing token is a password for this player. It is in the log only until
