@@ -13,17 +13,13 @@ it is encrypted.
   first start and keeps in this app's data, so Music Assistant sees a player it
   has never met. Volume, grouping and anything else stored for the old one do
   not carry over: add the new one to its groups again.
-- **A server has to pair with it before it can play.** On Home Assistant OS
-  this app hands its pairing token to Home Assistant through the Supervisor, so
-  once Home Assistant and Music Assistant support it, pairing is one
-  confirmation click. Until then, or if you prefer, pair by hand: the token is
-  in this app's log at startup, or use the 6-digit code the log shows while
-  Music Assistant asks for one. The README covers both.
+- **A server has to pair with it before it can play.** Paste the pairing
+  token from this app's log at startup into Music Assistant, or use the 6-digit
+  code the log shows while Music Assistant asks for one. The README covers both.
 - A new setting, **Let unpaired servers play**, turns pairing off for this
   player. It is off by default, and best left that way.
 - The pairing token is a password for this player. It is in the log only until
-  a server pairs. This app hands it to Home Assistant and nowhere else, and
-  never writes it to a file.
+  a server pairs, and this app never writes it to a file.
 
 ## 0.2.1
 

@@ -11,13 +11,13 @@
 # the API bashio reads, which is what the add-on does. Every check below is written once and both
 # modes deliver to it, so the two paths cannot end up held to different standards.
 #
-# Needs: docker, and python3 for the two stand-ins it runs on the host -- a Supervisor, and a
-# Music Assistant server for the checks that need a stream to have happened. The server is
-# aiosendspin, so the python3 that runs it needs scripts/smoke_requirements.txt installed; point
-# SMOKE_PYTHON at a virtualenv's interpreter that has them, or leave it to the python3 on PATH. Two
-# checks confine a container with the add-on's own AppArmor profile, and need a kernel that
-# enforces one plus apparmor_parser and the privilege to load it; without those they say so and
-# are skipped, unless --require-apparmor is given, which makes that a failure instead.
+# Needs: docker, and python3 for the two stand-ins it runs on the host -- a Supervisor in add-on
+# mode, and a Music Assistant server for the checks that need a stream to have happened. The
+# server is aiosendspin, so the python3 that runs it needs scripts/smoke_requirements.txt
+# installed; point SMOKE_PYTHON at a virtualenv's interpreter that has them, or leave it to the
+# python3 on PATH. Two checks confine a container with the add-on's own AppArmor profile, and need
+# a kernel that enforces one plus apparmor_parser and the privilege to load it; without those they
+# say so and are skipped, unless --require-apparmor is given, which makes that a failure instead.
 #
 # Usage: scripts/smoke_test.sh <image-ref> [--mode standalone|addon] [--require-apparmor]
 
@@ -183,7 +183,6 @@ SERVER_PID=''
 SERVER_PORT=''
 SERVER_MARKER=''
 SERVER_TOKEN_FILE=''
-DISCOVERY_BODY=''
 LAST_RUN_ARGS=()
 VOLUMES=()
 CHECKS=0
@@ -442,8 +441,6 @@ refute_process() {
 
 # Starts the stand-in on a port the OS picks, serving the options given as `key=value` pairs. The
 # stand-in leaves an empty value out, the way the Supervisor leaves out an option nobody set.
-# `discovery_status=<code>` is the one pair that is not an option: it is what the stand-in answers
-# POST /discovery with.
 #
 # Pairs rather than positional parameters so that a new option is one more argument at the call
 # site instead of a signature every caller has to be walked through in step.
@@ -454,21 +451,16 @@ start_supervisor() {
     local -a options
 
     for pair in "$@"; do
-        case $pair in
-            discovery_status=*) options+=(--discovery-status "${pair#*=}") ;;
-            *) options+=(--option "$pair") ;;
-        esac
+        options+=(--option "$pair")
     done
 
     stop_supervisor
     SUPERVISOR_MARKER="$WORK_DIR/supervisor-requests-${CHECKS}"
-    DISCOVERY_BODY="$WORK_DIR/discovery-body-${CHECKS}"
     : >"$log"
 
     python3 "$FAKE_SUPERVISOR" \
         --token "$SUPERVISOR_TOKEN" \
         --marker "$SUPERVISOR_MARKER" \
-        --discovery-body "$DISCOVERY_BODY" \
         ${options[@]+"${options[@]}"} \
         >"$log" 2>&1 &
     SUPERVISOR_PID=$!
@@ -669,9 +661,8 @@ retire_player() {
 # all of this in a subshell, where the container it started is tracked for cleanup in a copy of
 # the list that dies with it.
 start_player() {
-    local name='' output='' log_level='' server='' apparmor='' stream='' data='' supervisor=''
+    local name='' output='' log_level='' server='' apparmor='' stream='' data=''
     local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' hook_start='' hook_stop=''
-    local discovery_status=''
     local pair key value
     local -a args
 
@@ -692,8 +683,6 @@ start_player() {
             stream) stream=$value ;;
             apparmor) apparmor=$value ;;
             data) data=$value ;;
-            supervisor) supervisor=$value ;;
-            discovery_status) discovery_status=$value ;;
             *) fail "start_player: unknown option '$key'" ;;
         esac
     done
@@ -738,20 +727,11 @@ start_player() {
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
             "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
-            "allow_unpaired=$allow_unpaired" "hook_start=$hook_start" "hook_stop=$hook_stop" \
-            ${discovery_status:+"discovery_status=$discovery_status"}
+            "allow_unpaired=$allow_unpaired" "hook_start=$hook_start" "hook_stop=$hook_stop"
         args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
         args+=(--env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
         args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
     else
-        # A Supervisor a Compose player could reach if it went looking, and no token to say it
-        # is an add-on. Anything the stand-in then records is a request that should never have
-        # been made.
-        if [ -n "$supervisor" ]; then
-            start_supervisor
-            args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
-            args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
-        fi
         if [ -n "$name" ]; then args+=(--env "SENDSPIN_NAME=$name"); fi
         if [ -n "$output" ]; then args+=(--env "SENDSPIN_OUTPUT=$output"); fi
         if [ -n "$log_level" ]; then args+=(--env "SENDSPIN_LOG_LEVEL=$log_level"); fi
@@ -862,7 +842,7 @@ assert_clean_stop() {
     # The container has exited, so its log is complete -- a line that is not there now never
     # arrives, and there is nothing to wait for.
     log=$(logs_of "$container")
-    for service in sendspin-cli sendspin-discovery avahi dbus; do
+    for service in sendspin-cli avahi dbus; do
         if ! grep -F -e "service ${service} successfully stopped" "$log" >/dev/null; then
             show_logs "$container"
             fail "the s6 shutdown never brought ${service} down -- it ended part-way through"
@@ -1521,12 +1501,6 @@ check_confined_stop() {
         'avahi answered the player, so the daemons are up rather than restarting'
 
     assert_process "$container" 'avahi-daemon' 'avahi-daemon is running at the moment of the stop'
-
-    # curl and jq from the outer profile, and pair-token through the player's child profile.
-    if [ "$MODE" = addon ]; then
-        assert_log "$container" 'Published this player to Home Assistant for pairing' \
-            'the pairing token is published under the profile'
-    fi
     assert_process "$container" 'dbus-daemon' 'dbus-daemon is running at the moment of the stop'
 
     # The health check reaches into both daemons -- the player's control socket, then
@@ -1697,124 +1671,6 @@ check_confined_stream_hooks() {
     unload_apparmor_profile
 }
 
-# The add-on's half of automatic pairing: once the player answers, its pairing token goes to the
-# Supervisor's discovery API for Home Assistant Core to pick up. What is asserted is what Core will
-# be handed -- a token that decodes, for the client id the player really has -- and that the
-# message is withdrawn again on the way down.
-check_discovery_published() {
-    local container client_id token
-    step 'the pairing token is published through Supervisor discovery'
-    start_player "name=$PLAYER_NAME" 'output=null' "log_level=$PLAYER_LOG_LEVEL"
-    container=$PLAYER
-
-    assert_log "$container" 'Published this player to Home Assistant for pairing' \
-        'the add-on says it published the player'
-    assert_supervisor_requests 'every request to the stand-in Supervisor was authenticated'
-    grep -F -x -e "ok Authorization POST /discovery" "$SUPERVISOR_MARKER" >/dev/null || {
-        cat "$SUPERVISOR_MARKER" >&2
-        fail 'no authenticated POST /discovery reached the stand-in Supervisor'
-    }
-    pass 'the discovery message was posted with the Supervisor token'
-
-    client_id=$(client_id_of "$container")
-    "$SMOKE_PYTHON" - "$DISCOVERY_BODY" "$client_id" "$PLAYER_NAME" <<'PY' ||
-import base64
-import json
-import sys
-
-body_path, client_id, name = sys.argv[1:]
-with open(body_path, encoding="utf-8") as handle:
-    body = json.load(handle)
-
-def refuse(why):
-    # Never the token itself: this goes to a CI log.
-    sys.exit(f"discovery body: {why}")
-
-# The integration's domain, which is how Home Assistant routes a discovery message.
-if body.get("service") != "music_assistant":
-    refuse(f"service is {body.get('service')!r}, not 'music_assistant'")
-config = body.get("config") or {}
-if set(config) != {"client_id", "name", "port", "pairing_token"}:
-    refuse(f"config carries {sorted(config)}")
-if config["client_id"] != client_id:
-    refuse(f"client_id is {config['client_id']!r}, the player says {client_id!r}")
-if config["name"] != name:
-    refuse(f"name is {config['name']!r}, not {name!r}")
-if config["port"] != 8928:
-    refuse(f"port is {config['port']!r}, not 8928")
-
-token = config["pairing_token"]
-if not isinstance(token, str) or not token.startswith("SP:0"):
-    refuse("pairing_token is not a version-0 SP: token")
-body32 = token[4:].replace("9", "2")
-payload = base64.b32decode(body32 + "=" * (-len(body32) % 8))
-if len(payload) != 64:
-    refuse(f"pairing_token carries {len(payload)} bytes, not 64")
-if base64.urlsafe_b64encode(payload[:32]).rstrip(b"=").decode() != client_id:
-    refuse("the client key inside pairing_token is not the player's client id")
-PY
-        fail 'the discovery message is not what Home Assistant needs to pair'
-    pass 'it carries the client id, name, port, and a token whose client key is that id'
-
-    token=$(pairing_token_of "$container")
-    assert_token_kept_private "$container" "$token"
-    if grep -F -e "$token" "$WORK_DIR/supervisor.log" >/dev/null; then
-        fail 'the stand-in Supervisor logged the token -- it came in a URL rather than the body'
-    fi
-    pass 'the token travelled in the request body, not the URL'
-
-    assert_clean_stop "$container"
-    grep -F -x -e 'ok Authorization DELETE /discovery/<uuid>' "$SUPERVISOR_MARKER" >/dev/null || {
-        cat "$SUPERVISOR_MARKER" >&2
-        fail 'the discovery message was not withdrawn when the add-on stopped'
-    }
-    pass 'and withdrawn again, by the uuid it was given, when the add-on stops'
-}
-
-# Discovery is a convenience, and the player is the product. A Supervisor that refuses the message
-# gets a few retries and a warning, and nothing else: the player keeps playing and stays healthy.
-# The retries are why this waits as long as it does.
-check_discovery_refused() {
-    local container
-    step 'a Supervisor that refuses the discovery message'
-    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'discovery_status=500'
-    container=$PLAYER
-
-    if ! wait_for_log "$container" 'could not publish this player to Home Assistant' 90; then
-        show_logs "$container"
-        fail 'no warning that the discovery message could not be published'
-    fi
-    pass 'the add-on warns that it gave up publishing the player'
-    [ "$(grep -c -F -e 'refused Authorization POST /discovery' "$SUPERVISOR_MARKER")" -gt 1 ] ||
-        fail 'the refused POST was never retried'
-    pass 'after retrying the POST'
-
-    healthcheck "$container" >/dev/null || fail "the health check exited $? after the refusal"
-    pass 'the player is still up and healthy'
-    assert_clean_stop "$container"
-}
-
-# Compose has no Supervisor and no token, and must never go looking. A stand-in is put where one
-# would answer anyway, so a request that should not happen has somewhere to land and be counted.
-# Nothing logs after the decision not to publish, so this gives the player a few seconds past its
-# control socket answering -- the discovery service posts within one of that when it posts at all.
-check_no_discovery_in_compose() {
-    local container
-    step 'no discovery without a Supervisor'
-    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'supervisor=yes'
-    container=$PLAYER
-
-    client_id_of "$container" >/dev/null
-    sleep 3
-    if [ -s "$SUPERVISOR_MARKER" ]; then
-        cat "$SUPERVISOR_MARKER" >&2
-        fail 'a Compose player made a request of the Supervisor'
-    fi
-    pass 'a Compose player asks the Supervisor for nothing'
-    refute_log "$container" 'Home Assistant for pairing' \
-        'and says nothing about publishing itself'
-}
-
 # That the options the checks above asserted really did come over the API, authenticated. Without
 # this, add-on mode would still pass on an image that ignored the Supervisor entirely and fell
 # through to its defaults -- `null` is not one of those defaults, but a check that never looks at
@@ -1826,7 +1682,7 @@ check_supervisor_was_asked() {
     container=$PLAYER
 
     assert_log "$container" 'listening on port 8928' 'the player came up on its port'
-    assert_supervisor_requests 'the stand-in Supervisor was asked, and only on its own routes'
+    assert_supervisor_requests 'the stand-in Supervisor was asked, and only for its one route'
     assert_config_line "$container" "^name = ${PLAYER_NAME}\$" \
         'the name in the config came from the API rather than the default'
     assert_config_line "$container" '^output = null$' \
@@ -1868,13 +1724,18 @@ main() {
     docker image inspect "$IMAGE" >/dev/null 2>&1 ||
         fail "no such image '$IMAGE' -- build it first, or pass one that exists"
 
-    # Both stand-ins run in both modes: a stream is not something either option source changes,
-    # and standalone mode uses the Supervisor to prove it is never asked anything.
+    # The stand-in server runs in both modes -- a stream is not something either option source
+    # changes -- so python3 is needed in both, and is checked here rather than inside the
+    # add-on branch below where it used to be the stand-in Supervisor's requirement alone.
     [ -f "$FAKE_SERVER" ] || fail "no stand-in server at '$FAKE_SERVER'"
-    [ -f "$FAKE_SUPERVISOR" ] || fail "no stand-in Supervisor at '$FAKE_SUPERVISOR'"
-    command -v python3 >/dev/null || fail 'the stand-in Supervisor needs python3'
+    command -v python3 >/dev/null ||
+        fail 'the stream-hook checks need python3 for the stand-in Music Assistant server'
     "$SMOKE_PYTHON" -c 'import aiosendspin.server' 2>/dev/null ||
         fail "the stand-in server needs aiosendspin in $SMOKE_PYTHON -- pip install -r scripts/smoke_requirements.txt into a virtualenv and set SMOKE_PYTHON to its python"
+
+    if [ "$MODE" = addon ]; then
+        [ -f "$FAKE_SUPERVISOR" ] || fail "no stand-in Supervisor at '$FAKE_SUPERVISOR'"
+    fi
 
     printf 'smoke: testing %s in %s mode\n' "$IMAGE" "$MODE"
 
@@ -1895,13 +1756,10 @@ main() {
     check_confined_stop
     check_confined_stream_hooks
     if [ "$MODE" = addon ]; then
-        check_discovery_published
-        check_discovery_refused
         check_supervisor_was_asked
         check_supervisor_unreachable
     else
         check_leftover_id
-        check_no_discovery_in_compose
     fi
 
     if [ "$SKIPPED" -ne 0 ]; then

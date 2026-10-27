@@ -7,8 +7,6 @@ readonly SENDSPIN_CONF=/run/sendspin-cli/sendspin-cli.conf
 readonly SENDSPIN_STATE_DIR=/data/state
 readonly SENDSPIN_CONTROL_SOCKET=/run/sendspin-cli/control.sock
 readonly SENDSPIN_DAEMON_DECISION=/run/sendspin-cli/bundled-daemons
-readonly SENDSPIN_DISCOVERY_UUID=/run/sendspin-cli/discovery-uuid
-readonly SENDSPIN_PORT=8928
 readonly SYSTEM_BUS_DIR=/var/run/dbus
 readonly SYSTEM_BUS_SOCKET=/var/run/dbus/system_bus_socket
 readonly AVAHI_SOCKET=/run/avahi-daemon/socket
@@ -560,90 +558,4 @@ sendspin::check_output_is_audible() {
     fi
 
     sendspin::report_on_sinks "${target}" "${sinks}"
-}
-
-# ==============================================================================
-# Supervisor discovery
-#
-# Hands the pairing token to Home Assistant Core, the only reader of discovery
-# messages. The token is a long-lived credential, so it never reaches a log line
-# or a file of ours, and goes to jq through the environment and to curl on
-# stdin to stay out of every argv as well.
-# ==============================================================================
-
-sendspin::supervisor_api() {
-    printf '%s\n' "${SUPERVISOR_API:-http://supervisor}"
-}
-
-# Advisory, so every path returns success. Re-posted on every start, since the
-# Supervisor's message store is not ours to depend on.
-sendspin::publish_discovery() {
-    local status_out='' client_id name token payload response uuid
-    local i attempt delay=2
-
-    # The run script starts beside the player, not after it.
-    for ((i = 0; i < 600; i++)); do
-        if status_out=$(sendspin-cli status --control-socket "${SENDSPIN_CONTROL_SOCKET}" 2> /dev/null); then
-            break
-        fi
-        status_out=''
-        sleep 0.1
-    done
-    if [ -z "${status_out}" ]; then
-        sendspin::log 'Warning: the player never answered on its control socket, so it was not published to Home Assistant for pairing.'
-        return 0
-    fi
-
-    client_id=$(sed -n 's/^client id: //p' <<< "${status_out}")
-    name=$(sed -n 's/^name: //p' <<< "${status_out}")
-
-    # Checked by shape only, and never echoed: a wrong answer may be a token.
-    if ! token=$(sendspin-cli pair-token --control-socket "${SENDSPIN_CONTROL_SOCKET}" 2> /dev/null) \
-        || [ "${#token}" -ne 107 ] || [ "${token#SP:0}" = "${token}" ] || [ -z "${client_id}" ]; then
-        sendspin::log 'Warning: the player did not hand over a pairing token, so it was not published to Home Assistant for pairing.'
-        return 0
-    fi
-
-    payload=$(SENDSPIN_PAIRING_TOKEN="${token}" jq -n \
-        --arg client_id "${client_id}" --arg name "${name}" --argjson port "${SENDSPIN_PORT}" \
-        '{service: "music_assistant", config: {client_id: $client_id, name: $name, port: $port,
-            pairing_token: env.SENDSPIN_PAIRING_TOKEN}}')
-
-    for ((attempt = 1; attempt <= 5; attempt++)); do
-        if response=$(curl --silent --fail --connect-timeout 5 --max-time 10 \
-            --header "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
-            --header 'Content-Type: application/json' \
-            --data @- "$(sendspin::supervisor_api)/discovery" <<< "${payload}"); then
-            uuid=$(jq -r '.data.uuid // empty' <<< "${response}" 2> /dev/null) || uuid=''
-            if [ -n "${uuid}" ]; then
-                printf '%s\n' "${uuid}" > "${SENDSPIN_DISCOVERY_UUID}"
-            fi
-            sendspin::log "Published this player to Home Assistant for pairing, as ${client_id}."
-            return 0
-        fi
-        if [ "${attempt}" -lt 5 ]; then
-            sleep "${delay}"
-            delay=$((delay * 2))
-        fi
-    done
-
-    sendspin::log "Warning: could not publish this player to Home Assistant for pairing after five attempts. It plays as before; pair it by hand with the pairing token logged at startup."
-    return 0
-}
-
-# Bounded tightly because it runs on the way down, inside the Supervisor's stop
-# grace. A message left behind is harmless: the next start posts it again.
-sendspin::withdraw_discovery() {
-    local uuid
-
-    [ -n "${SUPERVISOR_TOKEN:-}" ] || return 0
-    [ -s "${SENDSPIN_DISCOVERY_UUID}" ] || return 0
-    uuid=$(cat "${SENDSPIN_DISCOVERY_UUID}")
-    rm -f "${SENDSPIN_DISCOVERY_UUID}"
-
-    curl --silent --fail --connect-timeout 1 --max-time 2 --request DELETE \
-        --header "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
-        "$(sendspin::supervisor_api)/discovery/${uuid}" > /dev/null \
-        || sendspin::log 'Warning: could not withdraw the Home Assistant discovery message; the next start replaces it.'
-    return 0
 }
