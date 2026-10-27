@@ -157,11 +157,9 @@ ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2
 # Raising `timeout` instead would buy silence rather than a clean stop, and the
 # add-on would still be sitting there not shutting down.
 #
-# The player and the two daemons come down in sequence, each bounded by its own
+# The three longruns come down in sequence, each bounded by its own
 # `timeout-kill` of 2000ms, and this is what bounds the tail after them: 3 * 2000
 # + 2000 = 8s worst case, measured at 8.2s with all three deliberately wedged.
-# sendspin-discovery is a fourth longrun but sits outside that chain -- nothing
-# depends on it -- so it comes down beside the player and adds nothing to it.
 #
 # The other two gracetimes s6-overlay documents are deliberately absent. They
 # look relevant and are not: S6_SERVICES_GRACETIME only bounds the v2-style

@@ -160,10 +160,7 @@ There is no static pairing code option. A static code needs someone to run
 `sendspin-cli pair confirm` for each attempt, which is a gesture a container has
 no one to make, and the token covers the same need.
 
-The Home Assistant app pairs differently on Home Assistant OS: it publishes the
-token to Home Assistant through the Supervisor, which is covered in the app's
-section below. Upstream's
-[Pairing a Player](https://github.com/Sendspin/sendspin-cpp-cli/wiki/Pairing-a-Player)
+Upstream's [Pairing a Player](https://github.com/Sendspin/sendspin-cpp-cli/wiki/Pairing-a-Player)
 page covers all of it in more detail.
 
 ## Choosing an output
@@ -309,38 +306,6 @@ passing the matching digest, which is what CI does per architecture. A plain
 behaviour described above is shared. It reads its `name`, `log_level`, `server`,
 `buffer_ms`, `allow_unpaired`, `hook_start` and `hook_stop` from the app options
 instead of the environment.
-
-### Pairing through Supervisor discovery
-
-On Home Assistant OS the app publishes the player's pairing token to Home
-Assistant Core, so Music Assistant can pair without anyone copying it. The
-`sendspin-discovery` service waits for the player's control socket, reads the
-token with `sendspin-cli pair-token`, and posts it to the Supervisor's
-`/discovery` API as service `music_assistant`, with `client_id`, `name` and
-`port` beside it. Home Assistant's Music Assistant integration is what then asks
-the user to confirm the player and hands the token to Music Assistant; that half
-lives in Home Assistant and Music Assistant, not here.
-
-The service is `music_assistant` rather than anything Sendspin-specific because
-Home Assistant routes a discovery message to the integration whose domain is the
-service name. The Music Assistant server app posts under the same name, and the
-integration tells the two apart by the `pairing_token` in this one's config.
-
-It goes that way, and not through a listener of the player's own, because of
-who can read it. Any app may post a discovery message, but only for a service
-its manifest lists under `discovery:`, and only Home Assistant Core may read
-one. A pairing endpoint on the Supervisor's Docker network would be reachable by
-every other app on the machine, and that network does not exist under Compose
-at all. The manifest's `hassio_api: true` at the default role is what posting
-needs, and costs nothing on the security rating.
-
-The token is posted on every start — it is stable, but whether the Supervisor
-still holds an earlier message is not this app's to depend on — and withdrawn
-again when the app stops. A Supervisor that refuses it gets four retries over
-about thirty seconds and then a warning; the player is unaffected either way.
-The token never appears in a line this image logs or a file it writes, and it
-reaches `jq` and `curl` through the environment and stdin rather than their
-arguments. Under Compose there is no Supervisor, and the service does nothing.
 
 The two hooks are the one option here that is code rather than a value, and they
 are the reason this app's AppArmor profile grants the player an exec at all. The

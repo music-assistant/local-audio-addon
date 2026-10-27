@@ -38,16 +38,7 @@ it once before it may play. A server that has not paired can connect but stays
 idle. Pairing is remembered in this app's data, so it survives restarts and
 updates; uninstalling the app forgets it.
 
-**Automatically, on Home Assistant OS.** When the app starts it hands the
-player's pairing token to Home Assistant through the Supervisor — nothing else
-can read it there. Once Home Assistant's Music Assistant integration supports
-it, Home Assistant asks you to confirm the new player and passes the token on
-to Music Assistant, and that one click is the whole of pairing. The log says
-`Published this player to Home Assistant for pairing` when this has happened;
-if the Supervisor could not take it, the log says so and the player carries on
-regardless.
-
-**By hand**, until then, in either of two ways:
+There are two ways to pair:
 
 - **The pairing token.** While nothing is paired, the log shows it once at
   startup, on a line that starts `No server is paired yet. Pairing token`. Copy

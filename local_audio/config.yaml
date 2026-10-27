@@ -25,13 +25,6 @@ host_network: true
 # gives this app its own Audio selector, which is how a user points it at a USB
 # DAC.
 audio: true
-# Publishes the player's pairing token to Home Assistant Core, the only reader of
-# discovery messages, so Music Assistant can pair without a copy and paste.
-# `hassio_api` at the default role is what posting needs, and costs no rating.
-# The service is the integration's domain: Core routes a message by that name.
-hassio_api: true
-discovery:
-  - music_assistant
 options:
   # Empty rather than absent, so the configuration screen shows the field
   # instead of folding it away as unused. An empty name is the default,
