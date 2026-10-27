@@ -1600,8 +1600,9 @@ check_identity_survives_recreation() {
     recreate_player
 
     after=$(client_id_of "$PLAYER")
-    [ -n "$before" ] && [ "$before" = "$after" ] ||
+    if [ -z "$before" ] || [ "$before" != "$after" ]; then
         fail "the client id was '$before' and is '$after' in the new container"
+    fi
     pass 'the client id is the same in a new container on the same /data'
 
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
