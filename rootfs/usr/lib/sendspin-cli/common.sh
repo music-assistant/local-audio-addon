@@ -606,7 +606,7 @@ sendspin::publish_discovery() {
 
     payload=$(SENDSPIN_PAIRING_TOKEN="${token}" jq -n \
         --arg client_id "${client_id}" --arg name "${name}" --argjson port "${SENDSPIN_PORT}" \
-        '{service: "sendspin", config: {client_id: $client_id, name: $name, port: $port,
+        '{service: "music_assistant", config: {client_id: $client_id, name: $name, port: $port,
             pairing_token: env.SENDSPIN_PAIRING_TOKEN}}')
 
     for ((attempt = 1; attempt <= 5; attempt++)); do

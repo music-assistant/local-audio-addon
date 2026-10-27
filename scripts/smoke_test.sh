@@ -1729,8 +1729,9 @@ def refuse(why):
     # Never the token itself: this goes to a CI log.
     sys.exit(f"discovery body: {why}")
 
-if body.get("service") != "sendspin":
-    refuse(f"service is {body.get('service')!r}, not 'sendspin'")
+# The integration's domain, which is how Home Assistant routes a discovery message.
+if body.get("service") != "music_assistant":
+    refuse(f"service is {body.get('service')!r}, not 'music_assistant'")
 config = body.get("config") or {}
 if set(config) != {"client_id", "name", "port", "pairing_token"}:
     refuse(f"config carries {sorted(config)}")

@@ -316,10 +316,15 @@ On Home Assistant OS the app publishes the player's pairing token to Home
 Assistant Core, so Music Assistant can pair without anyone copying it. The
 `sendspin-discovery` service waits for the player's control socket, reads the
 token with `sendspin-cli pair-token`, and posts it to the Supervisor's
-`/discovery` API as service `sendspin`, with `client_id`, `name` and `port`
-beside it. Home Assistant's Music Assistant integration is what then asks the
-user to confirm the player and hands the token to Music Assistant; that half
+`/discovery` API as service `music_assistant`, with `client_id`, `name` and
+`port` beside it. Home Assistant's Music Assistant integration is what then asks
+the user to confirm the player and hands the token to Music Assistant; that half
 lives in Home Assistant and Music Assistant, not here.
+
+The service is `music_assistant` rather than anything Sendspin-specific because
+Home Assistant routes a discovery message to the integration whose domain is the
+service name. The Music Assistant server app posts under the same name, and the
+integration tells the two apart by the `pairing_token` in this one's config.
 
 It goes that way, and not through a listener of the player's own, because of
 who can read it. Any app may post a discovery message, but only for a service
