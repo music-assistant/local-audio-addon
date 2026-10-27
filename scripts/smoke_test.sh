@@ -183,6 +183,7 @@ SERVER_PID=''
 SERVER_PORT=''
 SERVER_MARKER=''
 SERVER_TOKEN_FILE=''
+SERVER_UNPAIR_FILE=''
 DISCOVERY_BODY=''
 LAST_RUN_ARGS=()
 VOLUMES=()
@@ -234,6 +235,7 @@ stop_server() {
     SERVER_PORT=''
     SERVER_MARKER=''
     SERVER_TOKEN_FILE=''
+    SERVER_UNPAIR_FILE=''
 }
 
 cleanup() {
@@ -527,10 +529,11 @@ start_server() {
     stop_server
     SERVER_MARKER="$WORK_DIR/server-connections-${CHECKS}"
     SERVER_TOKEN_FILE="$WORK_DIR/server-token-${CHECKS}"
+    SERVER_UNPAIR_FILE="$WORK_DIR/server-unpair-${CHECKS}"
     : >"$log"
 
     "$SMOKE_PYTHON" "$FAKE_SERVER" --marker "$SERVER_MARKER" --token-file "$SERVER_TOKEN_FILE" \
-        >"$log" 2>&1 &
+        --unpair-file "$SERVER_UNPAIR_FILE" >"$log" 2>&1 &
     SERVER_PID=$!
 
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
@@ -671,7 +674,7 @@ retire_player() {
 start_player() {
     local name='' output='' log_level='' server='' apparmor='' stream='' data='' supervisor=''
     local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' hook_start='' hook_stop=''
-    local discovery_status=''
+    local discovery_status='' hand_token=yes
     local pair key value
     local -a args
 
@@ -694,6 +697,7 @@ start_player() {
             data) data=$value ;;
             supervisor) supervisor=$value ;;
             discovery_status) discovery_status=$value ;;
+            hand_token) hand_token=$value ;;
             *) fail "start_player: unknown option '$key'" ;;
         esac
     done
@@ -770,7 +774,8 @@ start_player() {
     LAST_RUN_ARGS=("${args[@]}")
     docker run "${args[@]}" "$IMAGE" >/dev/null || fail "could not start $IMAGE"
 
-    if [ -n "$stream" ]; then
+    # `hand_token=no` leaves pairing to the check, for one that has to see the player unpaired.
+    if [ -n "$stream" ] && [ "$hand_token" = yes ]; then
         hand_token_to_server "$PLAYER"
     fi
 }
@@ -1794,6 +1799,69 @@ check_discovery_refused() {
     assert_clean_stop "$container"
 }
 
+# Waits until `line` is in the stand-in Supervisor's record exactly `count` times, or `limit`
+# seconds pass.
+wait_for_supervisor_requests() {
+    local line=$1 count=$2 limit=$3
+    local waited=0
+    while [ "$waited" -lt "$((limit * 10))" ]; do
+        if [ "$(grep -c -F -x -e "$line" "$SUPERVISOR_MARKER" 2>/dev/null || true)" -eq "$count" ]; then
+            return 0
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    return 1
+}
+
+# Home Assistant is offered the player only while it is unpaired. The message goes once a server
+# pairs, stays away on a start that is already paired, and comes back once the pairing is lost --
+# all without the add-on restarting, which is what keeps the prompt from nagging a paired player.
+check_discovery_follows_pairing() {
+    local container
+    step 'the discovery message is withdrawn once a server pairs'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' 'hand_token=no' \
+        "data=${RUN_PREFIX}-discovery-data"
+    container=$PLAYER
+
+    assert_log "$container" 'Published this player to Home Assistant for pairing' \
+        'an unpaired player is offered to Home Assistant'
+    hand_token_to_server "$container"
+    assert_server_reached 'paired' 'the stand-in server paired with the player'
+    assert_log "$container" 'This player is paired now, so its offer to Home Assistant is withdrawn' \
+        'the add-on notices the pairing'
+    wait_for_supervisor_requests 'ok Authorization DELETE /discovery/<uuid>' 1 "$BOOT_TIMEOUT_S" || {
+        cat "$SUPERVISOR_MARKER" >&2
+        fail 'the discovery message was not withdrawn once the player paired'
+    }
+    [ "$(docker inspect --format '{{.State.Running}}' "$container")" = true ] ||
+        fail 'the player stopped while its discovery message was withdrawn'
+    pass 'and withdraws the message while the add-on keeps running'
+
+    step 'an already paired player is not offered'
+    recreate_player
+    container=$PLAYER
+    assert_log "$container" 'This player is already paired, so it was not offered to Home Assistant' \
+        'a start that finds the player paired says so'
+    [ "$(grep -c -F -x -e 'ok Authorization POST /discovery' "$SUPERVISOR_MARKER")" -eq 1 ] || {
+        cat "$SUPERVISOR_MARKER" >&2
+        fail 'an already paired player posted a discovery message'
+    }
+    pass 'and posts no discovery message'
+
+    step 'a player whose pairing is lost is offered again'
+    : >"$SERVER_UNPAIR_FILE"
+    assert_server_reached 'unpaired' 'the stand-in server dropped the pairing'
+    assert_log "$container" 'This player is no longer paired, so it is offered to Home Assistant again' \
+        'the add-on notices the lost pairing'
+    wait_for_supervisor_requests 'ok Authorization POST /discovery' 2 "$BOOT_TIMEOUT_S" || {
+        cat "$SUPERVISOR_MARKER" >&2
+        fail 'the player was not offered to Home Assistant again'
+    }
+    pass 'and posts the discovery message again'
+    assert_clean_stop "$container"
+}
+
 # Compose has no Supervisor and no token, and must never go looking. A stand-in is put where one
 # would answer anyway, so a request that should not happen has somewhere to land and be counted.
 # Nothing logs after the decision not to publish, so this gives the player a few seconds past its
@@ -1897,6 +1965,7 @@ main() {
     if [ "$MODE" = addon ]; then
         check_discovery_published
         check_discovery_refused
+        check_discovery_follows_pairing
         check_supervisor_was_asked
         check_supervisor_unreachable
     else
