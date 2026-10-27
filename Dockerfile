@@ -1,8 +1,8 @@
 # The player lives upstream and is built here from a pinned ref; this repo never
 # forks it. Bump both ARGs together: the SHA is checked against the clone, so a
 # repointed tag fails the build instead of quietly shipping different code.
-ARG SENDSPIN_CLI_REF=v0.3.0
-ARG SENDSPIN_CLI_SHA=bc0551c6f0c29ee1a773c4ea730bb20b71992a8a
+ARG SENDSPIN_CLI_REF=v0.4.0
+ARG SENDSPIN_CLI_SHA=45ff8b00e72ad1572a39e6e8ce21891748ab7d9e
 
 # ghcr.io/home-assistant/amd64-base-debian:trixie, which ships s6-overlay v3 and
 # bashio. CI overrides this with the digest for the architecture it is building;
@@ -157,9 +157,11 @@ ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2
 # Raising `timeout` instead would buy silence rather than a clean stop, and the
 # add-on would still be sitting there not shutting down.
 #
-# The three longruns come down in sequence, each bounded by its own
+# The player and the two daemons come down in sequence, each bounded by its own
 # `timeout-kill` of 2000ms, and this is what bounds the tail after them: 3 * 2000
 # + 2000 = 8s worst case, measured at 8.2s with all three deliberately wedged.
+# sendspin-discovery is a fourth longrun but sits outside that chain -- nothing
+# depends on it -- so it comes down beside the player and adds nothing to it.
 #
 # The other two gracetimes s6-overlay documents are deliberately absent. They
 # look relevant and are not: S6_SERVICES_GRACETIME only bounds the v2-style

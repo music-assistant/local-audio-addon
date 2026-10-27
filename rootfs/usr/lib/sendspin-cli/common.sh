@@ -7,6 +7,8 @@ readonly SENDSPIN_CONF=/run/sendspin-cli/sendspin-cli.conf
 readonly SENDSPIN_STATE_DIR=/data/state
 readonly SENDSPIN_CONTROL_SOCKET=/run/sendspin-cli/control.sock
 readonly SENDSPIN_DAEMON_DECISION=/run/sendspin-cli/bundled-daemons
+readonly SENDSPIN_DISCOVERY_UUID=/run/sendspin-cli/discovery-uuid
+readonly SENDSPIN_PORT=8928
 readonly SYSTEM_BUS_DIR=/var/run/dbus
 readonly SYSTEM_BUS_SOCKET=/var/run/dbus/system_bus_socket
 readonly AVAHI_SOCKET=/run/avahi-daemon/socket
@@ -18,9 +20,10 @@ sendspin::log() {
 }
 
 # Populate SENDSPIN_NAME, SENDSPIN_OUTPUT, SENDSPIN_LOG_LEVEL, SENDSPIN_SERVER,
-# SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT, SENDSPIN_ID, SENDSPIN_HOOK_START and
-# SENDSPIN_HOOK_STOP. Only the source differs between an add-on and a plain
-# container; the defaults below are applied to both so the two cannot drift.
+# SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT, SENDSPIN_ALLOW_UNPAIRED,
+# SENDSPIN_HOOK_START and SENDSPIN_HOOK_STOP. Only the source differs between an
+# add-on and a plain container; the defaults below are applied to both so the
+# two cannot drift.
 #
 # Stops the container on a value that would inject configuration keys, and on a
 # buffer the player would reject, rather than returning either to the caller.
@@ -46,6 +49,8 @@ sendspin::read_options() {
         SENDSPIN_LOG_LEVEL=$(sendspin::option "${config}" 'log_level')
         SENDSPIN_SERVER=$(sendspin::option "${config}" 'server')
         SENDSPIN_BUFFER_MS=$(sendspin::option "${config}" 'buffer_ms')
+        # A JSON false reads as empty here, which is the same as unset.
+        SENDSPIN_ALLOW_UNPAIRED=$(sendspin::option "${config}" 'allow_unpaired')
         SENDSPIN_HOOK_START=$(sendspin::option "${config}" 'hook_start')
         SENDSPIN_HOOK_STOP=$(sendspin::option "${config}" 'hook_stop')
 
@@ -71,14 +76,14 @@ sendspin::read_options() {
     # this repo's to keep in step with upstream's for good.
     SENDSPIN_BUFFER_MS="${SENDSPIN_BUFFER_MS:-}"
 
-    # Read from the environment in both branches because neither is an add-on
+    # Read from the environment in both branches because it is not an add-on
     # option. A pinned `audio-format` the output cannot advertise refuses to
     # start the player, and the add-on plays through Home Assistant's
     # PulseAudio, which converts -- there is no DAC behind it to hold at one
-    # shape. `id` only needs saying when two players share a host, which one
-    # add-on per system never does.
+    # shape.
     SENDSPIN_AUDIO_FORMAT="${SENDSPIN_AUDIO_FORMAT:-}"
-    SENDSPIN_ID="${SENDSPIN_ID:-}"
+
+    SENDSPIN_ALLOW_UNPAIRED="${SENDSPIN_ALLOW_UNPAIRED:-}"
 
     # Empty rather than defaulted, like the three above: the run script writes
     # only the keys that have a value, so a hook nobody set is absent from the
@@ -94,7 +99,7 @@ sendspin::read_options() {
     # values are shell commands by design, so there is nothing to sanitise
     # within a line: whoever may set an option may already run what they like.
     for name in SENDSPIN_NAME SENDSPIN_OUTPUT SENDSPIN_LOG_LEVEL SENDSPIN_SERVER \
-        SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ID \
+        SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ALLOW_UNPAIRED \
         SENDSPIN_HOOK_START SENDSPIN_HOOK_STOP; do
         value="${!name}"
         if [ "${value}" != "${value%%$'\n'*}" ]; then
@@ -129,6 +134,22 @@ sendspin::read_options() {
             exit 1
         fi
     fi
+
+    # Upstream takes exactly these two spellings; the add-on's schema already does.
+    case ${SENDSPIN_ALLOW_UNPAIRED} in
+        '' | true | false) ;;
+        *)
+            sendspin::log "SENDSPIN_ALLOW_UNPAIRED is \"${SENDSPIN_ALLOW_UNPAIRED}\", which is neither true nor false."
+            exit 1
+            ;;
+    esac
+}
+
+# Upstream refuses `id =` now that identity is the keypair in the state dir, but
+# an old Compose file setting SENDSPIN_ID is no reason not to start.
+sendspin::warn_if_id_is_set() {
+    [ -n "${SENDSPIN_ID:-}" ] || return 0
+    sendspin::log 'SENDSPIN_ID is ignored: the player now identifies itself by the keypair in /data/state, so give each player its own /data volume instead.'
 }
 
 # Whether this container runs its own dbus and avahi-daemon, recorded once by
@@ -539,4 +560,90 @@ sendspin::check_output_is_audible() {
     fi
 
     sendspin::report_on_sinks "${target}" "${sinks}"
+}
+
+# ==============================================================================
+# Supervisor discovery
+#
+# Hands the pairing token to Home Assistant Core, the only reader of discovery
+# messages. The token is a long-lived credential, so it never reaches a log line
+# or a file of ours, and goes to jq through the environment and to curl on
+# stdin to stay out of every argv as well.
+# ==============================================================================
+
+sendspin::supervisor_api() {
+    printf '%s\n' "${SUPERVISOR_API:-http://supervisor}"
+}
+
+# Advisory, so every path returns success. Re-posted on every start, since the
+# Supervisor's message store is not ours to depend on.
+sendspin::publish_discovery() {
+    local status_out='' client_id name token payload response uuid
+    local i attempt delay=2
+
+    # The run script starts beside the player, not after it.
+    for ((i = 0; i < 600; i++)); do
+        if status_out=$(sendspin-cli status --control-socket "${SENDSPIN_CONTROL_SOCKET}" 2> /dev/null); then
+            break
+        fi
+        status_out=''
+        sleep 0.1
+    done
+    if [ -z "${status_out}" ]; then
+        sendspin::log 'Warning: the player never answered on its control socket, so it was not published to Home Assistant for pairing.'
+        return 0
+    fi
+
+    client_id=$(sed -n 's/^client id: //p' <<< "${status_out}")
+    name=$(sed -n 's/^name: //p' <<< "${status_out}")
+
+    # Checked by shape only, and never echoed: a wrong answer may be a token.
+    if ! token=$(sendspin-cli pair-token --control-socket "${SENDSPIN_CONTROL_SOCKET}" 2> /dev/null) \
+        || [ "${#token}" -ne 107 ] || [ "${token#SP:0}" = "${token}" ] || [ -z "${client_id}" ]; then
+        sendspin::log 'Warning: the player did not hand over a pairing token, so it was not published to Home Assistant for pairing.'
+        return 0
+    fi
+
+    payload=$(SENDSPIN_PAIRING_TOKEN="${token}" jq -n \
+        --arg client_id "${client_id}" --arg name "${name}" --argjson port "${SENDSPIN_PORT}" \
+        '{service: "sendspin", config: {client_id: $client_id, name: $name, port: $port,
+            pairing_token: env.SENDSPIN_PAIRING_TOKEN}}')
+
+    for ((attempt = 1; attempt <= 5; attempt++)); do
+        if response=$(curl --silent --fail --connect-timeout 5 --max-time 10 \
+            --header "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+            --header 'Content-Type: application/json' \
+            --data @- "$(sendspin::supervisor_api)/discovery" <<< "${payload}"); then
+            uuid=$(jq -r '.data.uuid // empty' <<< "${response}" 2> /dev/null) || uuid=''
+            if [ -n "${uuid}" ]; then
+                printf '%s\n' "${uuid}" > "${SENDSPIN_DISCOVERY_UUID}"
+            fi
+            sendspin::log "Published this player to Home Assistant for pairing, as ${client_id}."
+            return 0
+        fi
+        if [ "${attempt}" -lt 5 ]; then
+            sleep "${delay}"
+            delay=$((delay * 2))
+        fi
+    done
+
+    sendspin::log "Warning: could not publish this player to Home Assistant for pairing after five attempts. It plays as before; pair it by hand with the token from 'sendspin-cli pair-token'."
+    return 0
+}
+
+# Bounded tightly because it runs on the way down, inside the Supervisor's stop
+# grace. A message left behind is harmless: the next start posts it again.
+sendspin::withdraw_discovery() {
+    local uuid
+
+    [ -n "${SUPERVISOR_TOKEN:-}" ] || return 0
+    [ -s "${SENDSPIN_DISCOVERY_UUID}" ] || return 0
+    uuid=$(cat "${SENDSPIN_DISCOVERY_UUID}")
+    rm -f "${SENDSPIN_DISCOVERY_UUID}"
+
+    curl --silent --fail --connect-timeout 1 --max-time 2 --request DELETE \
+        --header "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+        "$(sendspin::supervisor_api)/discovery/${uuid}" > /dev/null \
+        || sendspin::log 'Warning: could not withdraw the Home Assistant discovery message; the next start replaces it.'
+    return 0
 }

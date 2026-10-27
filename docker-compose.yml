@@ -68,12 +68,10 @@ services:
       # policy above, a container looping on the same refusal -- so set it only
       # against a device whose capabilities `sendspin-cli -l` has confirmed.
       # SENDSPIN_AUDIO_FORMAT: flac:48000:24:2
-      # This player's stable identity, which a server files volume, group
-      # membership and pairing under. Left unset it is derived from the network
-      # interface MAC, so two containers on one host would share it and each
-      # server-side setting would land on whichever connected last. Give each
-      # its own only when running more than one on the same machine.
-      # SENDSPIN_ID: living-room-left
+      # A server has to pair with this player before it can play; the README's
+      # Pairing section covers how. `true` lets any server on the network play
+      # without pairing, and anything but true or false stops the container.
+      # SENDSPIN_ALLOW_UNPAIRED: "false"
       # Run a shell command when a stream starts and when it stops -- switching
       # an amplifier relay on and off again is what these are for. The value is
       # a command, not data: it is handed to `sh -c` inside the container and

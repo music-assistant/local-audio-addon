@@ -7,6 +7,8 @@ sendspin::read_options
 
 sendspin::warn_if_output_changed_meaning
 
+sendspin::warn_if_id_is_set
+
 decision=$(sendspin::daemon_decision)
 
 if [ "${decision}" = 'yes' ]; then
@@ -40,8 +42,8 @@ install -m 600 /dev/null "${SENDSPIN_CONF}"
     if [ -n "${SENDSPIN_AUDIO_FORMAT}" ]; then
         printf 'audio-format = %s\n' "${SENDSPIN_AUDIO_FORMAT}"
     fi
-    if [ -n "${SENDSPIN_ID}" ]; then
-        printf 'id = %s\n' "${SENDSPIN_ID}"
+    if [ "${SENDSPIN_ALLOW_UNPAIRED}" = true ]; then
+        printf 'allow-unpaired = true\n'
     fi
     if [ -n "${SENDSPIN_HOOK_START}" ]; then
         printf 'hook-start = %s\n' "${SENDSPIN_HOOK_START}"

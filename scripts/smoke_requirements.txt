@@ -1,0 +1,4 @@
+# The stand-in Music Assistant server in scripts/fake_server.py. Pinned, so a smoke run is not at
+# the mercy of whatever aiosendspin released last; move it when Music Assistant moves. 10 is the
+# first release that speaks Sendspin 1.0.0-rc1, which sendspin-cli 0.4 requires.
+aiosendspin[server]==10.2.1

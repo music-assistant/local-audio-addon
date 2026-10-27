@@ -26,11 +26,12 @@ Music Assistant discovers the player over mDNS and connects back in on port
 8928, which is why the container needs `network_mode: host`. Once the log reads
 
 ```
-I cli: sendspin-cli 0.3.0 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
+I cli: sendspin-cli 0.4.0 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
 I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspin)
 ```
 
-the player is waiting to be picked up in Music Assistant's Sendspin provider.
+the player is waiting to be picked up in Music Assistant's Sendspin provider,
+which then has to pair with it before it can play — see [Pairing](#pairing).
 
 This image's own configuration is nine environment variables, all optional:
 
@@ -43,8 +44,8 @@ This image's own configuration is nine environment variables, all optional:
 | `SENDSPIN_BUFFER_MS` | unset (the player uses 100) | How much audio the output keeps buffered, `10`–`2000` |
 | `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
 | `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
+| `SENDSPIN_ALLOW_UNPAIRED` | `false` | `true` lets any server play without pairing |
 | `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:<channels>`, Compose only |
-| `SENDSPIN_ID` | derived from the interface MAC | This player's stable identity, Compose only |
 
 `SENDSPIN_BUFFER_MS` is how much audio the backend keeps queued up. Raise it
 where the sound breaks up on a busy or slow machine, at the cost of a longer
@@ -78,7 +79,7 @@ What the event was arrives in the environment:
 | `SENDSPIN_EVENT` | always, as `start` or `stop` |
 | `SENDSPIN_SERVER_ID`, `SENDSPIN_SERVER_NAME` | the server said who it was |
 | `SENDSPIN_SERVER_URL` | `SENDSPIN_SERVER` is set and the stream came from the server it dialled |
-| `SENDSPIN_CLIENT_ID` | `SENDSPIN_ID` was set; the derived default is not exposed |
+| `SENDSPIN_CLIENT_ID` | always, as this player's client id |
 | `SENDSPIN_CLIENT_NAME` | always, as the player's name |
 
 Anything unknown for an event is unset rather than empty, so `[ -n "$SENDSPIN_SERVER_ID" ]`
@@ -91,8 +92,8 @@ track down. The Home Assistant app offers the same two as
 had to be widened to let the player exec anything at all before they would work;
 the section on the app below covers what that grants.
 
-The last two variables in the table are deliberately Compose-only, and the Home
-Assistant app has no field for either.
+The last variable in the table is deliberately Compose-only, and the Home
+Assistant app has no field for it.
 
 `SENDSPIN_AUDIO_FORMAT` is for the DAC that will only play one shape properly.
 It moves that format to the front of the list this player advertises, so a
@@ -104,16 +105,62 @@ the same refusal. So check the device with `sendspin-cli -l` before pinning
 one. The app has no such DAC to hold: it plays through Home Assistant's
 PulseAudio, which converts.
 
-`SENDSPIN_ID` is for running two of these on one machine. They would otherwise
-both derive the same identity from the host's network interface MAC, and a
-server files volume, group membership and pairing under that identity — so the
-two players collide, and each setting lands on whichever of them connected last.
-Giving each container its own value separates them. One player per machine, the
-app included, has no collision to solve and should leave it unset.
+`SENDSPIN_ID` is gone. Up to 0.3 it chose the identity a server files volume,
+group membership and pairing under; that identity is now the public half of a
+keypair the player generates on first start and keeps in `/data/state`, and
+upstream refuses to have it chosen. A Compose file that still sets it starts
+the player anyway, with one line in the log saying the value is ignored.
+
+To run two of these on one machine, give each container its own `/data` volume,
+which is what gives each its own keypair. Two players sharing one volume share
+one identity, and every server-side setting lands on whichever connected last.
+Both also need `network_mode: host` and port 8928, so in practice the second one
+belongs on another machine.
 
 The two sound-server backends also read the environment their own client
 libraries define — `PULSE_SERVER`, `PULSE_COOKIE` and `PIPEWIRE_REMOTE` — which
 the sections below cover.
+
+## Pairing
+
+From 0.4 of the player, every connection is Noise-encrypted and a server has to
+**pair** with the player once before it may play. The server has to speak
+Sendspin 1.0.0-rc1: in Music Assistant, a Sendspin provider built on aiosendspin
+10 or later. A server that has not paired can connect, but stays idle, and
+`sendspin-cli status` shows `trust: unpaired` for it.
+
+There are three ways in:
+
+- **The pairing token.** Print it and paste it into Music Assistant where it
+  asks to pair a player with a token:
+
+  ```sh
+  docker compose exec local-audio sendspin-cli pair-token
+  ```
+
+  While nothing is paired the player also logs it once at startup, on a line
+  that starts `No server is paired yet. Pairing token`.
+- **A 6-digit code.** Ask Music Assistant to pair with a code; the player makes
+  one up for that attempt and logs it as `*** Pairing code: 123456 ***`, and
+  `sendspin-cli status` shows it as `pairing code:`. Type it into Music
+  Assistant.
+- **`SENDSPIN_ALLOW_UNPAIRED=true`** skips pairing entirely, and lets any server
+  on the network play. It renders as `allow-unpaired = true`, and anything but
+  `true` or `false` stops the container with a line naming the value.
+
+**Treat the token like a password.** It does not change for as long as `/data`
+is kept, and anyone who has it can pair a server with this player. It stops
+being logged once a server is paired.
+
+There is no static pairing code option. A static code needs someone to run
+`sendspin-cli pair confirm` for each attempt, which is a gesture a container has
+no one to make, and the token covers the same need.
+
+The Home Assistant app pairs differently on Home Assistant OS: it publishes the
+token to Home Assistant through the Supervisor, which is covered in the app's
+section below. Upstream's
+[Pairing a Player](https://github.com/Sendspin/sendspin-cpp-cli/wiki/Pairing-a-Player)
+page covers all of it in more detail.
 
 ## Choosing an output
 
@@ -222,9 +269,12 @@ it took:
 
 ## State
 
-`/data` holds the player's persistent state — volume, mute, static delay and
-the last server it talked to — under `/data/state`. The Compose file keeps it in
-a named volume, so a recreated container comes back at the same volume level.
+`/data` holds the player's persistent state under `/data/state`: its keypair,
+which is its identity, the servers it has paired with, and its volume, mute,
+output delay and the last server it talked to. The Compose file keeps it in a
+named volume, so a recreated container comes back as the same player, still
+paired, at the same volume level. Losing the volume makes it a new, unpaired
+player to every server.
 
 ## Bumping the player
 
@@ -253,8 +303,35 @@ passing the matching digest, which is what CI does per architecture. A plain
 
 `local_audio/` is the app manifest, wrapping this same image, so the runtime
 behaviour described above is shared. It reads its `name`, `log_level`, `server`,
-`buffer_ms`, `hook_start` and `hook_stop` from the app options instead of the
-environment.
+`buffer_ms`, `allow_unpaired`, `hook_start` and `hook_stop` from the app options
+instead of the environment.
+
+### Pairing through Supervisor discovery
+
+On Home Assistant OS the app publishes the player's pairing token to Home
+Assistant Core, so Music Assistant can pair without anyone copying it. The
+`sendspin-discovery` service waits for the player's control socket, reads the
+token with `sendspin-cli pair-token`, and posts it to the Supervisor's
+`/discovery` API as service `sendspin`, with `client_id`, `name` and `port`
+beside it. Home Assistant's Music Assistant integration is what then asks the
+user to confirm the player and hands the token to Music Assistant; that half
+lives in Home Assistant and Music Assistant, not here.
+
+It goes that way, and not through a listener of the player's own, because of
+who can read it. Any app may post a discovery message, but only for a service
+its manifest lists under `discovery:`, and only Home Assistant Core may read
+one. A pairing endpoint on the Supervisor's Docker network would be reachable by
+every other app on the machine, and that network does not exist under Compose
+at all. The manifest's `hassio_api: true` at the default role is what posting
+needs, and costs nothing on the security rating.
+
+The token is posted on every start — it is stable, but whether the Supervisor
+still holds an earlier message is not this app's to depend on — and withdrawn
+again when the app stops. A Supervisor that refuses it gets four retries over
+about thirty seconds and then a warning; the player is unaffected either way.
+The token never appears in a line this image logs or a file it writes, and it
+reaches `jq` and `curl` through the environment and stdin rather than their
+arguments. Under Compose there is no Supervisor, and the service does nothing.
 
 The two hooks are the one option here that is code rather than a value, and they
 are the reason this app's AppArmor profile grants the player an exec at all. The

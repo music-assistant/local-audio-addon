@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0
+
+Built on `sendspin-cli` v0.4.0, and through it `sendspin-cpp` v0.9.5.
+
+**Breaking:** the player now speaks Sendspin 1.0.0-rc1, and every connection to
+it is encrypted.
+
+- **It needs a newer Music Assistant.** The server has to run aiosendspin 10 or
+  later; an older one cannot connect to this player at all.
+- **It shows up as a new player.** Its identity is now a key it generates on
+  first start and keeps in this app's data, so Music Assistant sees a player it
+  has never met. Volume, grouping and anything else stored for the old one do
+  not carry over: add the new one to its groups again.
+- **A server has to pair with it before it can play.** On Home Assistant OS
+  this app hands its pairing token to Home Assistant through the Supervisor, so
+  once Home Assistant and Music Assistant support it, pairing is one
+  confirmation click. Until then, or if you prefer, pair by hand: the token is
+  in this app's log at startup, or use the 6-digit code the log shows while
+  Music Assistant asks for one. The README covers both.
+- A new setting, **Let unpaired servers play**, turns pairing off for this
+  player. It is off by default, and best left that way.
+- The pairing token is a password for this player. It is in the log only until
+  a server pairs. This app hands it to Home Assistant and nowhere else, and
+  never writes it to a file.
+
 ## 0.2.1
 
 - The player talks to Home Assistant's audio system directly instead of through
