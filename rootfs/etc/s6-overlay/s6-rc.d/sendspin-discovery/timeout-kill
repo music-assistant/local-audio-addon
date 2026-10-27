@@ -1,0 +1,6 @@
+2000
+# The number is line 1; s6 stops reading there, so nothing may precede it.
+#
+# Same bound as the others. Nothing depends on this service and it depends on
+# nothing but the oneshot, so s6-rc brings it down beside the player rather than
+# in front of it: it adds no step to the shutdown chain the Dockerfile counts.

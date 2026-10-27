@@ -1,313 +1,161 @@
 #!/usr/bin/env python3
 """
-A stand-in for a Music Assistant server, for the stream-hook checks in scripts/smoke_test.sh.
+A Music Assistant stand-in for the stream-hook checks in scripts/smoke_test.sh.
 
 --hook-start and --hook-stop fire on a stream starting and ending, and nothing else reaches
 them: no control-socket command starts a stream, and the player runs one only for a server
 that sends it. So the only way to assert that a hook *ran* -- rather than that a container
 carrying one came up -- is to be the server that starts the stream.
 
-This is deliberately not a Sendspin server, and not a WebSocket implementation either. It
-speaks the four messages that get a player from connected to streaming and back:
+Since sendspin-cli 0.4 every connection is a Noise KKpsk2 session and an unpaired server may
+not play, so this is a real Sendspin server rather than a hand-rolled one: aiosendspin, pinned
+in scripts/smoke_requirements.txt. A second protocol implementation in this repository would
+be one more thing to keep in step with the spec, and the wrong one to trust.
 
-    server/hello   the half of the handshake the player waits for before it is established
-    client/hello   waited for, so the stream below is sent to a player that is listening
-    stream/start   what fires on_stream_start, and with it the start hook
-    stream/end     and what fires the stop hook
+Pairing uses the player's own token, exactly as a user pasting it into Music Assistant would:
+the suite reads it with `sendspin-cli pair-token` and writes it to --token-file, which this
+polls. So the token path is exercised end to end on every run.
 
-No audio follows the stream/start and none is needed: the stream lifecycle callback fires on
-the message rather than on the first chunk. `client/time` is answered because the player asks
-until it is; everything else it sends is read and dropped.
+Each milestone is recorded in --marker, one per line, and the smoke suite asserts what it finds
+there -- a check whose player never connected would otherwise assert the absence of a hook's
+output and pass:
 
-Out of scope of the RFC 6455 handling below, because nothing on this connection produces any
-of it: frame fragmentation and continuation frames, extensions, close negotiation, and
-payloads past 64 KiB in either direction. A binary frame is read and dropped; a fragmented
-text one would be handed to the JSON parser in pieces and end the connection, which is the
-honest failure for a file that is trying not to be a second protocol implementation.
-
-Every connection is recorded in --marker, one outcome per line, and the smoke suite asserts
-what it finds there: a check whose player never connected would otherwise assert the absence
-of a hook's output and pass.
+    connected     the player dialled in and finished its handshake
+    paired        a pairing with the token from --token-file succeeded
+    stream-start  audio was committed to the paired player's group
+    stream-end    the stream was stopped
 
 Runs on the host rather than in a container of its own, the way scripts/fake_supervisor.py
 does; the container under test reaches it through `--add-host`.
 """
 
 import argparse
-import base64
-import hashlib
-import json
-import select
-import socketserver
-import struct
-import time
+import asyncio
+import logging
+import socket
+from pathlib import Path
 
-# RFC 6455's handshake constant. The accept key is the client's key concatenated with this,
-# hashed and base64'd, and a client that gets a different answer drops the connection.
-WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+from aiosendspin.models.types import PairMethod
+from aiosendspin.noise import Identity, InMemoryServerPairingStore, decode_psk_token
+from aiosendspin.noise.pairing import PairingAttempt
+from aiosendspin.server import AudioFormat, ClientConnectedEvent, SendspinServer
 
-OPCODE_TEXT = 0x1
-OPCODE_CLOSE = 0x8
-OPCODE_PING = 0x9
-OPCODE_PONG = 0xA
+# Silence at CD-ish rates: what the player decodes does not matter, only that a stream ran.
+STREAM_FORMAT = AudioFormat(sample_rate=48000, bit_depth=16, channels=2)
+CHUNK_MS = 100
 
-# The protocol version the player's own client/hello carries.
-PROTOCOL_VERSION = 1
-
-# What the player is told to expect. CD audio, and not negotiated against what the client/hello
-# advertised: the stream lifecycle fires on any codec the player can build a header for, so
-# picking a format here would be describing a negotiation this does not do.
-STREAM_FORMAT = {"codec": "pcm", "sample_rate": 44100, "bit_depth": 16, "channels": 2}
-
-# How often the loop looks at the stream deadline while no frame is arriving, and how long one
-# frame's own reads may take once it has started.
 POLL_S = 0.2
-FRAME_TIMEOUT_S = 5
 
-# The largest frame this will read, and the largest it can write -- the two-byte length field is
-# the widest it encodes. The longest thing it sends is a server/hello of a couple of hundred
-# bytes, and the longest the player sends is a client/hello of a few thousand.
-MAX_FRAME_BYTES = 65535
-
-# How long a stream runs before stream/end, in milliseconds. Long enough that the start hook has
-# certainly run by the time the stop hook is asked for, short enough not to pad every check.
-STREAM_MS = 1000
+# Every wait here is generous for a loaded runner, and returns as soon as its condition holds.
+WAIT_S = 60
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--marker", required=True, help="file to record the outcome of every connection in"
+        "--marker", required=True, help="file to record each milestone in"
     )
     parser.add_argument(
-        "--port",
+        "--token-file",
+        required=True,
+        help="file the suite writes the player's pairing token into; polled until it appears",
+    )
+    parser.add_argument(
+        "--stream-ms",
         type=int,
-        default=0,
-        help="port to listen on; 0 lets the OS choose a free one",
+        default=1000,
+        help="how long the stream runs before it is stopped",
     )
     return parser.parse_args()
 
 
-def log(message):
-    print(f"fake-server: {message}", flush=True)
+def free_port():
+    # Picked here and handed to the server rather than read back out of it: aiosendspin has no
+    # public way to report a port it was asked to choose. The window between the two binds is
+    # the only race, and nothing else on a runner is reaching for ephemeral ports in it.
+    with socket.socket() as probe:
+        probe.bind(("0.0.0.0", 0))
+        return probe.getsockname()[1]
 
 
-def receive_exactly(connection, count):
-    """`count` bytes from the socket, or None if it closed before they arrived."""
-    chunks = []
-    while count:
-        chunk = connection.recv(count)
-        if not chunk:
-            return None
-        chunks.append(chunk)
-        count -= len(chunk)
-    return b"".join(chunks)
+async def wait_for(predicate, what):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + WAIT_S
+    while not predicate():
+        if loop.time() > deadline:
+            raise TimeoutError(f"timed out waiting for {what}")
+        await asyncio.sleep(POLL_S)
 
 
-def receive_frame(connection):
-    """The next frame as (opcode, payload), or None once the peer has gone."""
-    header = receive_exactly(connection, 2)
-    if header is None:
-        return None
-    opcode = header[0] & 0x0F
-    masked = bool(header[1] & 0x80)
-    length = header[1] & 0x7F
-
-    if length in (126, 127):
-        width = 2 if length == 126 else 8
-        extended = receive_exactly(connection, width)
-        if extended is None:
-            return None
-        length = struct.unpack("!H" if width == 2 else "!Q", extended)[0]
-
-    # Capped for the reason the handshake read is: this binds 0.0.0.0, and a declared length is
-    # a number anything that connects can choose. Nothing the player sends comes near it.
-    if length > MAX_FRAME_BYTES:
-        log(f"refusing a frame declaring {length} bytes")
-        return None
-
-    mask = b""
-    if masked:
-        mask = receive_exactly(connection, 4)
-        if mask is None:
-            return None
-
-    payload = b"" if length == 0 else receive_exactly(connection, length)
-    if payload is None:
-        return None
-    if masked:
-        payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
-    return opcode, payload
-
-
-def send_frame(connection, opcode, payload):
-    """One unmasked frame. A server never masks, which is the whole of the difference.
-
-    The two-byte length is the widest this encodes, which is MAX_FRAME_BYTES above.
-    """
-    header = bytearray([0x80 | opcode])
-    length = len(payload)
-    if length < 126:
-        header.append(length)
-    else:
-        header.append(126)
-        header.extend(struct.pack("!H", length))
-    connection.sendall(bytes(header) + payload)
-
-
-def send_message(connection, message):
-    send_frame(connection, OPCODE_TEXT, json.dumps(message).encode())
-
-
-def complete_handshake(connection):
-    """Answers the WebSocket upgrade, or returns False having answered nothing."""
-    buffer = b""
-    while b"\r\n\r\n" not in buffer:
-        chunk = connection.recv(4096)
-        if not chunk:
-            return False
-        buffer += chunk
-        # A request this long is not the player's, and reading on would be a way for anything
-        # that connects to this port to hold it open.
-        if len(buffer) > 16384:
-            return False
-
-    key = None
-    for line in buffer.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")[1:]:
-        name, separator, value = line.partition(":")
-        if separator and name.strip().lower() == "sec-websocket-key":
-            key = value.strip()
-    if key is None:
-        return False
-
-    accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
-    connection.sendall(
-        (
-            "HTTP/1.1 101 Switching Protocols\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            f"Sec-WebSocket-Accept: {accept}\r\n"
-            "\r\n"
-        ).encode()
-    )
-    return True
-
-
-def now_us():
-    return time.monotonic_ns() // 1000
-
-
-class Handler(socketserver.BaseRequestHandler):
-    """One player connection: handshake, hello, stream, end, then read until it goes."""
-
-    def record(self, outcome):
-        with open(self.server.marker, "a", encoding="utf-8") as handle:
+async def run(args):
+    def record(outcome):
+        with open(args.marker, "a", encoding="utf-8") as handle:
             handle.write(outcome + "\n")
+        print(f"fake-server: {outcome}", flush=True)
 
-    def handle(self):
-        try:
-            self.serve(self.request)
-        except (OSError, ValueError) as error:
-            log(f"connection ended: {error}")
+    loop = asyncio.get_running_loop()
+    server = SendspinServer(
+        loop,
+        Identity.generate(),
+        "Smoke Test Server",
+        pairing_store=InMemoryServerPairingStore(),
+    )
 
-    def serve(self, connection):
-        connection.settimeout(FRAME_TIMEOUT_S)
-        if not complete_handshake(connection):
-            self.record("no-websocket-handshake")
-            log("a connection did not complete the WebSocket handshake")
-            return
+    connected = set()
 
-        # Sent without waiting for the client/hello: the player's handshake completes when its
-        # own hello has gone out and this one has arrived, in either order.
-        send_message(
-            connection,
-            {
-                "type": "server/hello",
-                "payload": {
-                    "server_id": "smoke-test-server",
-                    "name": "Smoke Test Server",
-                    "version": PROTOCOL_VERSION,
-                    "active_roles": ["player"],
-                    "connection_reason": "playback",
-                },
-            },
-        )
+    def on_event(_server, event):
+        if isinstance(event, ClientConnectedEvent):
+            connected.add(event.client_id)
 
-        ends_at = None
-        while True:
-            if ends_at is not None and time.monotonic() >= ends_at:
-                send_message(connection, {"type": "stream/end", "payload": {}})
-                self.record("stream-end")
-                log("sent stream/end")
-                ends_at = None
+    server.add_event_listener(on_event)
 
-            # Polled rather than blocked on, so that the stream/end above goes out on time
-            # whether or not the player happens to be saying anything.
-            if not select.select([connection], [], [], POLL_S)[0]:
-                continue
+    port = free_port()
+    await server.start_server(port=port, discover_clients=False)
+    print(f"fake-server: listening on port {port}", flush=True)
 
-            frame = receive_frame(connection)
-            if frame is None:
-                return
-            opcode, payload = frame
-            if opcode == OPCODE_CLOSE:
-                return
-            if opcode == OPCODE_PING:
-                send_frame(connection, OPCODE_PONG, payload)
-                continue
-            if opcode != OPCODE_TEXT:
-                continue
+    token_file = Path(args.token_file)
+    await wait_for(lambda: token_file.exists() and token_file.read_text().strip(), "the token")
+    token = decode_psk_token(token_file.read_text().strip())
 
-            message = json.loads(payload.decode())
-            kind = message.get("type")
+    await wait_for(lambda: token.client_id in connected, "the player to connect")
+    record("connected")
 
-            if kind == "client/time":
-                # Answered because the player asks until it is. The figures are this process's
-                # own clock, which is enough for a player that is never sent any audio.
-                send_message(
-                    connection,
-                    {
-                        "type": "server/time",
-                        "payload": {
-                            "client_transmitted": message.get("payload", {}).get(
-                                "client_transmitted", 0
-                            ),
-                            "server_received": now_us(),
-                            "server_transmitted": now_us(),
-                        },
-                    },
-                )
-            elif kind == "client/hello":
-                self.record("client-hello")
-                log("client/hello received, starting a stream")
-                send_message(
-                    connection,
-                    {"type": "stream/start", "payload": {"player": STREAM_FORMAT}},
-                )
-                self.record("stream-start")
-                ends_at = time.monotonic() + STREAM_MS / 1000
+    await server.initiate_pairing(
+        token.client_id,
+        PairingAttempt(
+            method=PairMethod.PAIRING_PSK,
+            pairing_psk=token.pairing_psk,
+            client_id=token.client_id,
+        ),
+    )
+    record("paired")
 
+    client = server.get_client(token.client_id)
+    await wait_for(lambda: client.is_connected, "the paired player to reconnect")
 
-class Server(socketserver.ThreadingTCPServer):
-    daemon_threads = True
-    allow_reuse_address = True
-    # Named so the handler, which is instantiated per connection, reads it off the server it
-    # already has rather than off a global.
-    marker = None
+    stream = client.group.start_stream()
+    silence = bytes(STREAM_FORMAT.sample_rate * CHUNK_MS // 1000 * 2 * STREAM_FORMAT.channels)
+    started = False
+    for _ in range(max(1, args.stream_ms // CHUNK_MS)):
+        stream.prepare_audio(silence, STREAM_FORMAT)
+        await stream.commit_audio()
+        if not started:
+            record("stream-start")
+            started = True
+        await stream.sleep_to_limit_buffer(500_000)
+
+    client.group.stop_stream()
+    record("stream-end")
+
+    # Held open rather than torn down, so the player sees a stream end and not a dropped
+    # server. The suite kills this process when the check is done.
+    await asyncio.Event().wait()
 
 
 def main():
     args = parse_args()
-
-    # 0.0.0.0 for the reason the stand-in Supervisor binds it: the point of this is to be
-    # reachable from a container, whose host-gateway address is not the loopback one.
-    server = Server(("0.0.0.0", args.port), Handler)
-    server.marker = args.marker
-
-    # Printed rather than assumed, because --port 0 means the caller does not know it yet.
-    log(f"listening on port {server.server_address[1]}")
-
-    server.serve_forever()
+    logging.basicConfig(level=logging.INFO, format="fake-server: %(name)s: %(message)s")
+    asyncio.run(run(args))
 
 
 if __name__ == "__main__":

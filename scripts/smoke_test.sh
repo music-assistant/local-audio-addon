@@ -11,8 +11,10 @@
 # the API bashio reads, which is what the add-on does. Every check below is written once and both
 # modes deliver to it, so the two paths cannot end up held to different standards.
 #
-# Needs: docker, and python3 for the two stand-ins it runs on the host -- a Supervisor in add-on
-# mode, and a Music Assistant server for the checks that need a stream to have happened. Two
+# Needs: docker, and python3 for the two stand-ins it runs on the host -- a Supervisor, and a
+# Music Assistant server for the checks that need a stream to have happened. The server is
+# aiosendspin, so the python3 that runs it needs scripts/smoke_requirements.txt installed; point
+# SMOKE_PYTHON at a virtualenv's interpreter that has them, or leave it to the python3 on PATH. Two
 # checks confine a container with the add-on's own AppArmor profile, and need a kernel that
 # enforces one plus apparmor_parser and the privilege to load it; without those they say so and
 # are skipped, unless --require-apparmor is given, which makes that a failure instead.
@@ -80,6 +82,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 readonly SCRIPT_DIR
 readonly FAKE_SUPERVISOR="$SCRIPT_DIR/fake_supervisor.py"
 readonly FAKE_SERVER="$SCRIPT_DIR/fake_server.py"
+readonly SMOKE_PYTHON="${SMOKE_PYTHON:-python3}"
 
 # The add-on's own AppArmor profile. The name it is loaded under is APPARMOR_SLUG, below.
 readonly APPARMOR_SOURCE="$SCRIPT_DIR/../local_audio/apparmor.txt"
@@ -179,6 +182,10 @@ SUPERVISOR_MARKER=''
 SERVER_PID=''
 SERVER_PORT=''
 SERVER_MARKER=''
+SERVER_TOKEN_FILE=''
+DISCOVERY_BODY=''
+LAST_RUN_ARGS=()
+VOLUMES=()
 CHECKS=0
 
 fail() {
@@ -226,14 +233,19 @@ stop_server() {
     SERVER_PID=''
     SERVER_PORT=''
     SERVER_MARKER=''
+    SERVER_TOKEN_FILE=''
 }
 
 cleanup() {
     local container
     stop_supervisor
     stop_server
+    local volume
     for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
         docker rm --force --volumes "$container" >/dev/null 2>&1 || true
+    done
+    for volume in ${VOLUMES[@]+"${VOLUMES[@]}"}; do
+        docker volume rm --force "$volume" >/dev/null 2>&1 || true
     done
     # After the containers, so nothing is still running under the profile as it is unloaded. The
     # kernel keeps it otherwise, and a later run would confine against whatever this one left. A
@@ -430,6 +442,8 @@ refute_process() {
 
 # Starts the stand-in on a port the OS picks, serving the options given as `key=value` pairs. The
 # stand-in leaves an empty value out, the way the Supervisor leaves out an option nobody set.
+# `discovery_status=<code>` is the one pair that is not an option: it is what the stand-in answers
+# POST /discovery with.
 #
 # Pairs rather than positional parameters so that a new option is one more argument at the call
 # site instead of a signature every caller has to be walked through in step.
@@ -440,16 +454,21 @@ start_supervisor() {
     local -a options
 
     for pair in "$@"; do
-        options+=(--option "$pair")
+        case $pair in
+            discovery_status=*) options+=(--discovery-status "${pair#*=}") ;;
+            *) options+=(--option "$pair") ;;
+        esac
     done
 
     stop_supervisor
     SUPERVISOR_MARKER="$WORK_DIR/supervisor-requests-${CHECKS}"
+    DISCOVERY_BODY="$WORK_DIR/discovery-body-${CHECKS}"
     : >"$log"
 
     python3 "$FAKE_SUPERVISOR" \
         --token "$SUPERVISOR_TOKEN" \
         --marker "$SUPERVISOR_MARKER" \
+        --discovery-body "$DISCOVERY_BODY" \
         ${options[@]+"${options[@]}"} \
         >"$log" 2>&1 &
     SUPERVISOR_PID=$!
@@ -475,9 +494,9 @@ start_supervisor() {
     fail 'the stand-in Supervisor never reported a port'
 }
 
-# Every request the stand-in answered since it was started, one outcome per line. `ok <header>`
-# is an authenticated fetch of the one route it serves; anything else is a request that should
-# not have happened.
+# Every request the stand-in answered since it was started, one outcome per line. `ok <header>
+# <method> <path>` is an authenticated request to a route it serves; anything else is a request
+# that should not have happened.
 assert_supervisor_requests() {
     local what=$1
     local unexpected
@@ -507,9 +526,11 @@ start_server() {
 
     stop_server
     SERVER_MARKER="$WORK_DIR/server-connections-${CHECKS}"
+    SERVER_TOKEN_FILE="$WORK_DIR/server-token-${CHECKS}"
     : >"$log"
 
-    python3 "$FAKE_SERVER" --marker "$SERVER_MARKER" >"$log" 2>&1 &
+    "$SMOKE_PYTHON" "$FAKE_SERVER" --marker "$SERVER_MARKER" --token-file "$SERVER_TOKEN_FILE" \
+        >"$log" 2>&1 &
     SERVER_PID=$!
 
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
@@ -555,6 +576,74 @@ assert_server_reached() {
 }
 
 # ==============================================================================
+# The player's identity and pairing token
+# ==============================================================================
+
+# The token as `sendspin-cli pair-token` hands it over, polled until the control socket answers.
+# Kept in a variable by the caller and never printed: a failure message that echoed it would be
+# the leak the checks below are about.
+pairing_token_of() {
+    local container=$1
+    local waited=0 token
+    while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
+        if token=$(docker exec "$container" \
+            sendspin-cli pair-token --control-socket /run/sendspin-cli/control.sock 2>/dev/null); then
+            printf '%s\n' "$token"
+            return 0
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    show_logs "$container"
+    fail 'sendspin-cli pair-token never answered'
+}
+
+client_id_of() {
+    local container=$1
+    local waited=0 out
+    while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
+        if out=$(docker exec "$container" \
+            sendspin-cli status --control-socket /run/sendspin-cli/control.sock 2>/dev/null); then
+            sed -n 's/^client id: //p' <<<"$out"
+            return 0
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    show_logs "$container"
+    fail 'sendspin-cli status never answered'
+}
+
+# What a user does by hand: read the token off the player and paste it into the server. Written
+# through a rename so the stand-in, which polls for the file, never reads half of it.
+hand_token_to_server() {
+    local container=$1
+    pairing_token_of "$container" >"${SERVER_TOKEN_FILE}.tmp"
+    mv "${SERVER_TOKEN_FILE}.tmp" "$SERVER_TOKEN_FILE"
+}
+
+# Upstream logs the token once at startup while nothing is paired, and the brief this image is
+# held to accepts that one line: the add-on log is admin-only. Anything past it is a line of
+# ours, or a file of ours, that carries a credential which pairs any server with this player.
+assert_token_kept_private() {
+    local container=$1 token=$2
+    local count files
+
+    count=$(grep -c -F -e "$token" "$(logs_of "$container")" || true)
+    if [ "$count" -gt 1 ]; then
+        fail "the pairing token is in the container log $count times -- only upstream's one startup line may carry it"
+    fi
+    pass 'the pairing token is in the log no more than upstream says it once'
+
+    # -D skip, for the control socket that sits beside the rendered config.
+    files=$(docker exec "$container" grep -r -l -D skip -F -e "$token" /data /run/sendspin-cli || true)
+    if [ -n "$files" ]; then
+        fail "the pairing token was written to $(tr '\n' ' ' <<<"$files")"
+    fi
+    pass 'and no file under /data or /run/sendspin-cli carries it'
+}
+
+# ==============================================================================
 # Starting a player
 # ==============================================================================
 
@@ -580,8 +669,9 @@ retire_player() {
 # all of this in a subshell, where the container it started is tracked for cleanup in a copy of
 # the list that dies with it.
 start_player() {
-    local name='' output='' log_level='' server='' apparmor='' stream=''
-    local buffer_ms='' audio_format='' id='' hook_start='' hook_stop=''
+    local name='' output='' log_level='' server='' apparmor='' stream='' data='' supervisor=''
+    local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' hook_start='' hook_stop=''
+    local discovery_status=''
     local pair key value
     local -a args
 
@@ -595,11 +685,15 @@ start_player() {
             server) server=$value ;;
             buffer_ms) buffer_ms=$value ;;
             audio_format) audio_format=$value ;;
-            id) id=$value ;;
+            legacy_id) legacy_id=$value ;;
+            allow_unpaired) allow_unpaired=$value ;;
             hook_start) hook_start=$value ;;
             hook_stop) hook_stop=$value ;;
             stream) stream=$value ;;
             apparmor) apparmor=$value ;;
+            data) data=$value ;;
+            supervisor) supervisor=$value ;;
+            discovery_status) discovery_status=$value ;;
             *) fail "start_player: unknown option '$key'" ;;
         esac
     done
@@ -627,30 +721,75 @@ start_player() {
         args+=(--security-opt "apparmor=$apparmor")
     fi
 
-    # `audio_format` and `id` are served here too, though they are not add-on options: a check
-    # can then assert that the add-on does not take them even when a Supervisor offers them,
-    # which is a stronger statement about the split than never offering them would be.
+    # A named volume on /data, which is what both deployments give the player: the add-on's
+    # persistent directory, and `local-audio-data` in the Compose file. Named by the check so that
+    # a second container can be given the same one.
+    if [ -n "$data" ]; then
+        docker volume inspect "$data" >/dev/null 2>&1 || {
+            docker volume create "$data" >/dev/null || fail "could not create the volume $data"
+            VOLUMES+=("$data")
+        }
+        args+=(--volume "$data:/data")
+    fi
+
+    # `audio_format` is served here too, though it is not an add-on option: a check can then
+    # assert that the add-on does not take it even when a Supervisor offers it, which is a
+    # stronger statement about the split than never offering it would be.
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
-            "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" "id=$id" \
-            "hook_start=$hook_start" "hook_stop=$hook_stop"
+            "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
+            "allow_unpaired=$allow_unpaired" "hook_start=$hook_start" "hook_stop=$hook_stop" \
+            ${discovery_status:+"discovery_status=$discovery_status"}
         args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
         args+=(--env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
         args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
     else
+        # A Supervisor a Compose player could reach if it went looking, and no token to say it
+        # is an add-on. Anything the stand-in then records is a request that should never have
+        # been made.
+        if [ -n "$supervisor" ]; then
+            start_supervisor
+            args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
+            args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
+        fi
         if [ -n "$name" ]; then args+=(--env "SENDSPIN_NAME=$name"); fi
         if [ -n "$output" ]; then args+=(--env "SENDSPIN_OUTPUT=$output"); fi
         if [ -n "$log_level" ]; then args+=(--env "SENDSPIN_LOG_LEVEL=$log_level"); fi
         if [ -n "$server" ]; then args+=(--env "SENDSPIN_SERVER=$server"); fi
         if [ -n "$buffer_ms" ]; then args+=(--env "SENDSPIN_BUFFER_MS=$buffer_ms"); fi
         if [ -n "$audio_format" ]; then args+=(--env "SENDSPIN_AUDIO_FORMAT=$audio_format"); fi
-        if [ -n "$id" ]; then args+=(--env "SENDSPIN_ID=$id"); fi
+        if [ -n "$legacy_id" ]; then args+=(--env "SENDSPIN_ID=$legacy_id"); fi
+        if [ -n "$allow_unpaired" ]; then
+            args+=(--env "SENDSPIN_ALLOW_UNPAIRED=$allow_unpaired")
+        fi
         if [ -n "$hook_start" ]; then args+=(--env "SENDSPIN_HOOK_START=$hook_start"); fi
         if [ -n "$hook_stop" ]; then args+=(--env "SENDSPIN_HOOK_STOP=$hook_stop"); fi
     fi
 
     CONTAINERS+=("$PLAYER")
+    LAST_RUN_ARGS=("${args[@]}")
     docker run "${args[@]}" "$IMAGE" >/dev/null || fail "could not start $IMAGE"
+
+    if [ -n "$stream" ]; then
+        hand_token_to_server "$PLAYER"
+    fi
+}
+
+# Replaces the player with a fresh container started exactly as the last one was, leaving the
+# stand-ins and any volume alone. It is what the Supervisor does on an add-on restart and what
+# `docker compose up` does on an upgrade: the container goes, and only /data carries over.
+recreate_player() {
+    local -a args=("${LAST_RUN_ARGS[@]}")
+    local i
+
+    docker rm --force "$PLAYER" >/dev/null 2>&1 || true
+    PLAYER="${PLAYER}-again"
+    for i in "${!args[@]}"; do
+        if [ "${args[$i]}" = --name ]; then args[i + 1]=$PLAYER; fi
+    done
+    CONTAINERS+=("$PLAYER")
+    LAST_RUN_ARGS=("${args[@]}")
+    docker run "${args[@]}" "$IMAGE" >/dev/null || fail "could not start $IMAGE again"
 }
 
 # Waits for Docker to report the container healthy, or `limit` seconds pass. This is the
@@ -723,7 +862,7 @@ assert_clean_stop() {
     # The container has exited, so its log is complete -- a line that is not there now never
     # arrives, and there is nothing to wait for.
     log=$(logs_of "$container")
-    for service in sendspin-cli avahi dbus; do
+    for service in sendspin-cli sendspin-discovery avahi dbus; do
         if ! grep -F -e "service ${service} successfully stopped" "$log" >/dev/null; then
             show_logs "$container"
             fail "the s6 shutdown never brought ${service} down -- it ended part-way through"
@@ -820,7 +959,7 @@ unload_apparmor_profile() {
 # bundled dbus, avahi-daemon, and the avahi-compat shim the player registers through -- so it is
 # asserted end to end as well as by its parts.
 check_advertise_mode() {
-    local container mode status_out devices_out
+    local container mode status_out devices_out token
     step 'advertise mode'
     start_player "name=$PLAYER_NAME" 'output=null' "log_level=$PLAYER_LOG_LEVEL"
     container=$PLAYER
@@ -886,8 +1025,10 @@ check_advertise_mode() {
         'an unset buffer is left out, so the player keeps its own default'
     refute_config_line "$container" '^audio-format' \
         'an unset audio format is left out rather than pinning a shape nobody asked for'
-    refute_config_line "$container" '^id = ' \
-        'an unset client id is left out, so the player derives its own'
+    refute_config_line "$container" '^allow-unpaired' \
+        'unpaired access is left out unless asked for, so a server has to pair'
+    assert_log "$container" 'A server must pair with this player before it can play' \
+        'and the player says so'
 
     # Written on every start from neither deployment's configuration, so they are asserted on the
     # unconfigured player: an image that only reported itself properly when configured would be
@@ -912,6 +1053,15 @@ check_advertise_mode() {
         fail 'the control socket did not report the configured output'
     fi
     pass 'the control socket answers and reports the configured output'
+
+    if ! grep -E -e '^client id: [A-Za-z0-9_-]{43}$' "$status_out" >/dev/null; then
+        cat "$status_out" >&2
+        fail 'the control socket reported no client id, or one that is not a 32-byte key'
+    fi
+    pass 'the player identifies itself by its public key'
+
+    token=$(pairing_token_of "$container")
+    assert_token_kept_private "$container" "$token"
 
     # The list the binary itself reports, as against the one the Dockerfile grepped out of a
     # configure log in a stage that no longer exists. It is compile-time information either way
@@ -1154,30 +1304,82 @@ check_buffer_ms() {
     done
 }
 
-# The two values Compose has and the add-on deliberately does not. Add-on mode is served both by
-# the stand-in Supervisor and has to ignore them, which says "not an option here" far more firmly
-# than never offering them would. The format is one a device-less sink advertises, so what is
-# under test is the plumbing rather than a player refusing a shape it could not honour.
+# The value Compose has and the add-on deliberately does not. Add-on mode is served it by the
+# stand-in Supervisor and has to ignore it, which says "not an option here" far more firmly than
+# never offering it would. The format is one a device-less sink advertises, so what is under test
+# is the plumbing rather than a player refusing a shape it could not honour.
 check_compose_only_options() {
     local container
 
     step 'the Compose-only options'
-    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" \
-        'audio_format=flac:48000:24:2' 'id=smoke-test-player'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'audio_format=flac:48000:24:2'
     container=$PLAYER
     assert_log "$container" 'listening on port 8928' 'the player came up on its port'
 
     if [ "$MODE" = addon ]; then
         refute_config_line "$container" '^audio-format' \
             'an audio format is not an add-on option, even with a Supervisor serving one'
-        refute_config_line "$container" '^id = ' \
-            'nor is a client id, for the same reason'
     else
         assert_config_line "$container" '^audio-format = flac:48000:24:2$' \
             'the audio format reached the rendered config under the key the player reads'
-        assert_config_line "$container" '^id = smoke-test-player$' \
-            'and so did the client id'
     fi
+}
+
+# SENDSPIN_ID chose the client id up to 0.3, and upstream now refuses `id =` outright, since the
+# id is the public half of the player's keypair. A Compose file that still sets it has to start
+# a player anyway, and say once why the value went nowhere. Standalone only: the add-on never had
+# the option.
+check_leftover_id() {
+    local container count
+
+    step 'a leftover SENDSPIN_ID'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'legacy_id=living-room-left'
+    container=$PLAYER
+
+    assert_log "$container" 'listening on port 8928' 'the player starts regardless'
+    refute_config_line "$container" '^id' 'and nothing reaches the config for upstream to refuse'
+    count=$(grep -c -F -e 'SENDSPIN_ID is ignored' "$(logs_of "$container")" || true)
+    [ "$count" = 1 ] || {
+        show_logs "$container"
+        fail "the log says SENDSPIN_ID is ignored $count times, not once"
+    }
+    pass 'the log says once that SENDSPIN_ID is ignored'
+}
+
+# The one way past pairing. Off unless asked for, and rendered only when it is on, so upstream's
+# own default stands otherwise. Compose has nothing in front of the value, so the refusal of a
+# spelling upstream would not take is asserted there; the add-on's `bool?` schema does that job.
+check_allow_unpaired() {
+    local container
+
+    step 'unpaired access turned on'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'allow_unpaired=true'
+    container=$PLAYER
+    assert_log "$container" 'Unpaired access is on: any server may play here' \
+        'the player lets an unpaired server play'
+    assert_config_line "$container" '^allow-unpaired = true$' \
+        'because the option reached the config under the key the player reads'
+
+    step 'unpaired access turned off'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'allow_unpaired=false'
+    container=$PLAYER
+    assert_log "$container" 'A server must pair with this player before it can play' \
+        'the player still requires pairing'
+    refute_config_line "$container" '^allow-unpaired' \
+        'and false is left out rather than written'
+
+    [ "$MODE" = standalone ] || return 0
+
+    step 'unpaired access spelled yes'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'allow_unpaired=yes'
+    container=$PLAYER
+    wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+        show_logs "$container"
+        fail 'SENDSPIN_ALLOW_UNPAIRED=yes left the container running'
+    }
+    assert_exit_code "$container" 1 'the container exits 1 on a value upstream would refuse'
+    assert_log "$container" 'SENDSPIN_ALLOW_UNPAIRED is "yes", which is neither true nor false.' \
+        'the log names the value it refused, and why'
 }
 
 # An output the host cannot open is the likeliest way for this image to be misconfigured, and the
@@ -1319,6 +1521,12 @@ check_confined_stop() {
         'avahi answered the player, so the daemons are up rather than restarting'
 
     assert_process "$container" 'avahi-daemon' 'avahi-daemon is running at the moment of the stop'
+
+    # curl and jq from the outer profile, and pair-token through the player's child profile.
+    if [ "$MODE" = addon ]; then
+        assert_log "$container" 'Published this player to Home Assistant for pairing' \
+            'the pairing token is published under the profile'
+    fi
     assert_process "$container" 'dbus-daemon' 'dbus-daemon is running at the moment of the stop'
 
     # The health check reaches into both daemons -- the player's control socket, then
@@ -1357,7 +1565,7 @@ check_stream_hooks() {
 
     step 'the stream hooks'
     start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' \
-        "hook_start=$HOOK_COMMAND" "hook_stop=$HOOK_COMMAND"
+        "hook_start=$HOOK_COMMAND" "hook_stop=$HOOK_COMMAND" "data=${RUN_PREFIX}-data"
     container=$PLAYER
 
     # Logged after the config is written and before the player is exec'd, so it is what makes
@@ -1369,12 +1577,51 @@ check_stream_hooks() {
     assert_config_line "$container" '^hook-stop = ' \
         'and so did the stop hook'
 
+    assert_server_reached 'paired' \
+        "the stand-in server paired with the token from the player's own pair-token"
     assert_server_reached 'stream-start' 'the stand-in server started a stream on the player'
     assert_log "$container" 'the start hook ran' \
         'the start hook was run, and its output reached the log'
     assert_server_reached 'stream-end' 'the stand-in server ended the stream'
     assert_log "$container" 'the stop hook ran' \
         'the stop hook was run when the stream ended'
+
+    check_identity_survives_recreation
+}
+
+# The keypair and the pairing records live in /data/state, so both have to outlive the container
+# itself: the Supervisor and Compose both replace it on a restart or an upgrade. Run from the hook
+# check because a pairing is only worth asserting where a real server made one.
+check_identity_survives_recreation() {
+    local before after waited=0 status_out=''
+
+    step 'the identity and pairing survive a new container'
+    before=$(client_id_of "$PLAYER")
+    recreate_player
+
+    after=$(client_id_of "$PLAYER")
+    if [ -z "$before" ] || [ "$before" != "$after" ]; then
+        fail "the client id was '$before' and is '$after' in the new container"
+    fi
+    pass 'the client id is the same in a new container on the same /data'
+
+    while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
+        status_out=$(docker exec "$PLAYER" \
+            sendspin-cli status --control-socket /run/sendspin-cli/control.sock 2>/dev/null || true)
+        if grep -F -x -e 'trust: paired' <<<"$status_out" >/dev/null; then
+            break
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    grep -F -x -e 'trust: paired' <<<"$status_out" >/dev/null || {
+        printf '%s\n' "$status_out" >&2
+        show_logs "$PLAYER"
+        fail 'the new container did not reconnect to the stand-in server as paired'
+    }
+    pass 'and the server it paired with is still paired, with no second pairing'
+    refute_log "$PLAYER" 'No server is paired yet' \
+        'so the player has no reason to log its token again'
 }
 
 # The same thing under the profile the Supervisor installs, and the check this whole change
@@ -1450,6 +1697,124 @@ check_confined_stream_hooks() {
     unload_apparmor_profile
 }
 
+# The add-on's half of automatic pairing: once the player answers, its pairing token goes to the
+# Supervisor's discovery API for Home Assistant Core to pick up. What is asserted is what Core will
+# be handed -- a token that decodes, for the client id the player really has -- and that the
+# message is withdrawn again on the way down.
+check_discovery_published() {
+    local container client_id token
+    step 'the pairing token is published through Supervisor discovery'
+    start_player "name=$PLAYER_NAME" 'output=null' "log_level=$PLAYER_LOG_LEVEL"
+    container=$PLAYER
+
+    assert_log "$container" 'Published this player to Home Assistant for pairing' \
+        'the add-on says it published the player'
+    assert_supervisor_requests 'every request to the stand-in Supervisor was authenticated'
+    grep -F -x -e "ok Authorization POST /discovery" "$SUPERVISOR_MARKER" >/dev/null || {
+        cat "$SUPERVISOR_MARKER" >&2
+        fail 'no authenticated POST /discovery reached the stand-in Supervisor'
+    }
+    pass 'the discovery message was posted with the Supervisor token'
+
+    client_id=$(client_id_of "$container")
+    "$SMOKE_PYTHON" - "$DISCOVERY_BODY" "$client_id" "$PLAYER_NAME" <<'PY' ||
+import base64
+import json
+import sys
+
+body_path, client_id, name = sys.argv[1:]
+with open(body_path, encoding="utf-8") as handle:
+    body = json.load(handle)
+
+def refuse(why):
+    # Never the token itself: this goes to a CI log.
+    sys.exit(f"discovery body: {why}")
+
+# The integration's domain, which is how Home Assistant routes a discovery message.
+if body.get("service") != "music_assistant":
+    refuse(f"service is {body.get('service')!r}, not 'music_assistant'")
+config = body.get("config") or {}
+if set(config) != {"client_id", "name", "port", "pairing_token"}:
+    refuse(f"config carries {sorted(config)}")
+if config["client_id"] != client_id:
+    refuse(f"client_id is {config['client_id']!r}, the player says {client_id!r}")
+if config["name"] != name:
+    refuse(f"name is {config['name']!r}, not {name!r}")
+if config["port"] != 8928:
+    refuse(f"port is {config['port']!r}, not 8928")
+
+token = config["pairing_token"]
+if not isinstance(token, str) or not token.startswith("SP:0"):
+    refuse("pairing_token is not a version-0 SP: token")
+body32 = token[4:].replace("9", "2")
+payload = base64.b32decode(body32 + "=" * (-len(body32) % 8))
+if len(payload) != 64:
+    refuse(f"pairing_token carries {len(payload)} bytes, not 64")
+if base64.urlsafe_b64encode(payload[:32]).rstrip(b"=").decode() != client_id:
+    refuse("the client key inside pairing_token is not the player's client id")
+PY
+        fail 'the discovery message is not what Home Assistant needs to pair'
+    pass 'it carries the client id, name, port, and a token whose client key is that id'
+
+    token=$(pairing_token_of "$container")
+    assert_token_kept_private "$container" "$token"
+    if grep -F -e "$token" "$WORK_DIR/supervisor.log" >/dev/null; then
+        fail 'the stand-in Supervisor logged the token -- it came in a URL rather than the body'
+    fi
+    pass 'the token travelled in the request body, not the URL'
+
+    assert_clean_stop "$container"
+    grep -F -x -e 'ok Authorization DELETE /discovery/<uuid>' "$SUPERVISOR_MARKER" >/dev/null || {
+        cat "$SUPERVISOR_MARKER" >&2
+        fail 'the discovery message was not withdrawn when the add-on stopped'
+    }
+    pass 'and withdrawn again, by the uuid it was given, when the add-on stops'
+}
+
+# Discovery is a convenience, and the player is the product. A Supervisor that refuses the message
+# gets a few retries and a warning, and nothing else: the player keeps playing and stays healthy.
+# The retries are why this waits as long as it does.
+check_discovery_refused() {
+    local container
+    step 'a Supervisor that refuses the discovery message'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'discovery_status=500'
+    container=$PLAYER
+
+    if ! wait_for_log "$container" 'could not publish this player to Home Assistant' 90; then
+        show_logs "$container"
+        fail 'no warning that the discovery message could not be published'
+    fi
+    pass 'the add-on warns that it gave up publishing the player'
+    [ "$(grep -c -F -e 'refused Authorization POST /discovery' "$SUPERVISOR_MARKER")" -gt 1 ] ||
+        fail 'the refused POST was never retried'
+    pass 'after retrying the POST'
+
+    healthcheck "$container" >/dev/null || fail "the health check exited $? after the refusal"
+    pass 'the player is still up and healthy'
+    assert_clean_stop "$container"
+}
+
+# Compose has no Supervisor and no token, and must never go looking. A stand-in is put where one
+# would answer anyway, so a request that should not happen has somewhere to land and be counted.
+# Nothing logs after the decision not to publish, so this gives the player a few seconds past its
+# control socket answering -- the discovery service posts within one of that when it posts at all.
+check_no_discovery_in_compose() {
+    local container
+    step 'no discovery without a Supervisor'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'supervisor=yes'
+    container=$PLAYER
+
+    client_id_of "$container" >/dev/null
+    sleep 3
+    if [ -s "$SUPERVISOR_MARKER" ]; then
+        cat "$SUPERVISOR_MARKER" >&2
+        fail 'a Compose player made a request of the Supervisor'
+    fi
+    pass 'a Compose player asks the Supervisor for nothing'
+    refute_log "$container" 'Home Assistant for pairing' \
+        'and says nothing about publishing itself'
+}
+
 # That the options the checks above asserted really did come over the API, authenticated. Without
 # this, add-on mode would still pass on an image that ignored the Supervisor entirely and fell
 # through to its defaults -- `null` is not one of those defaults, but a check that never looks at
@@ -1461,7 +1826,7 @@ check_supervisor_was_asked() {
     container=$PLAYER
 
     assert_log "$container" 'listening on port 8928' 'the player came up on its port'
-    assert_supervisor_requests 'the stand-in Supervisor was asked, and only for its one route'
+    assert_supervisor_requests 'the stand-in Supervisor was asked, and only on its own routes'
     assert_config_line "$container" "^name = ${PLAYER_NAME}\$" \
         'the name in the config came from the API rather than the default'
     assert_config_line "$container" '^output = null$' \
@@ -1503,16 +1868,13 @@ main() {
     docker image inspect "$IMAGE" >/dev/null 2>&1 ||
         fail "no such image '$IMAGE' -- build it first, or pass one that exists"
 
-    # The stand-in server runs in both modes -- a stream is not something either option source
-    # changes -- so python3 is needed in both, and is checked here rather than inside the
-    # add-on branch below where it used to be the stand-in Supervisor's requirement alone.
+    # Both stand-ins run in both modes: a stream is not something either option source changes,
+    # and standalone mode uses the Supervisor to prove it is never asked anything.
     [ -f "$FAKE_SERVER" ] || fail "no stand-in server at '$FAKE_SERVER'"
-    command -v python3 >/dev/null ||
-        fail 'the stream-hook checks need python3 for the stand-in Music Assistant server'
-
-    if [ "$MODE" = addon ]; then
-        [ -f "$FAKE_SUPERVISOR" ] || fail "no stand-in Supervisor at '$FAKE_SUPERVISOR'"
-    fi
+    [ -f "$FAKE_SUPERVISOR" ] || fail "no stand-in Supervisor at '$FAKE_SUPERVISOR'"
+    command -v python3 >/dev/null || fail 'the stand-in Supervisor needs python3'
+    "$SMOKE_PYTHON" -c 'import aiosendspin.server' 2>/dev/null ||
+        fail "the stand-in server needs aiosendspin in $SMOKE_PYTHON -- pip install -r scripts/smoke_requirements.txt into a virtualenv and set SMOKE_PYTHON to its python"
 
     printf 'smoke: testing %s in %s mode\n' "$IMAGE" "$MODE"
 
@@ -1527,13 +1889,19 @@ main() {
     check_output_names_that_did_not
     check_buffer_ms
     check_compose_only_options
+    check_allow_unpaired
     check_crash_visibility
     check_stream_hooks
     check_confined_stop
     check_confined_stream_hooks
     if [ "$MODE" = addon ]; then
+        check_discovery_published
+        check_discovery_refused
         check_supervisor_was_asked
         check_supervisor_unreachable
+    else
+        check_leftover_id
+        check_no_discovery_in_compose
     fi
 
     if [ "$SKIPPED" -ne 0 ]; then

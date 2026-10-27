@@ -10,8 +10,10 @@ synchronization protocol built into Music Assistant.
 
 ## What you need
 
-- Music Assistant 2.7 or newer. Sendspin is built into Music Assistant and
-  cannot be turned off, so there is nothing to enable.
+- A Music Assistant whose Sendspin support speaks Sendspin 1.0.0-rc1 — built on
+  aiosendspin 10 or later. An older one cannot connect to this player at all.
+  Sendspin is built into Music Assistant and cannot be turned off, so there is
+  nothing to enable.
 - Music Assistant and this player on the same local network. Discovery and audio
   both stay on the LAN; there is no reverse proxy, HTTPS or VPN story.
 - Something to play through, wired to this machine.
@@ -24,8 +26,54 @@ synchronization protocol built into Music Assistant.
 3. In Music Assistant the player appears by itself, named after this machine —
    usually **homeassistant**. Set **Player name** to something better.
 
+4. Pair Music Assistant with the player — see below.
+
 Nothing else needs configuring. Music Assistant finds the player over mDNS and
 connects to it.
+
+## Pairing with Music Assistant
+
+Every connection to the player is encrypted, and a server has to **pair** with
+it once before it may play. A server that has not paired can connect but stays
+idle. Pairing is remembered in this app's data, so it survives restarts and
+updates; uninstalling the app forgets it.
+
+**Automatically, on Home Assistant OS.** When the app starts it hands the
+player's pairing token to Home Assistant through the Supervisor — nothing else
+can read it there. Once Home Assistant's Music Assistant integration supports
+it, Home Assistant asks you to confirm the new player and passes the token on
+to Music Assistant, and that one click is the whole of pairing. The log says
+`Published this player to Home Assistant for pairing` when this has happened;
+if the Supervisor could not take it, the log says so and the player carries on
+regardless.
+
+**By hand**, until then, in either of two ways:
+
+- **The pairing token.** While nothing is paired, the log shows it once at
+  startup, on a line that starts `No server is paired yet. Pairing token`. Copy
+  the `SP:0…` string and paste it into Music Assistant where it asks to pair a
+  player with a token.
+- **A 6-digit code.** Ask Music Assistant to pair with a code. The player makes
+  one up for that attempt and logs it as `*** Pairing code: 123456 ***`; type it
+  into Music Assistant.
+
+**Treat the token like a password.** Anyone who has it can pair a server with
+this player, and it does not change. It stops being logged once a server is
+paired. The app log is visible only to Home Assistant administrators.
+
+**Let unpaired servers play** turns pairing off: any server on your network may
+then play here without it. Leave it off unless you have a reason; it is the
+setting that turns the encryption back into a formality.
+
+Upstream's [Pairing a Player](https://github.com/Sendspin/sendspin-cpp-cli/wiki/Pairing-a-Player)
+page goes into more detail.
+
+### Upgrading from 0.2.x
+
+The player's identity is now a key it generates on first start, so Music
+Assistant sees a new player after the upgrade. Volume, grouping and anything
+else stored for the old one do not carry over: pair the new one, add it to its
+groups again, and remove the old one.
 
 ## Choosing where the sound comes out
 

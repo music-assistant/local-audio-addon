@@ -185,6 +185,13 @@ jobs:
             sudo apt-get install --yes --no-install-recommends apparmor
           fi
 
+      # Here for the reason it is in build.yml.
+      - name: Install the smoke test's stand-in server
+        run: |
+          python3 -m venv "$RUNNER_TEMP/smoke-venv"
+          "$RUNNER_TEMP/smoke-venv/bin/pip" install --quiet -r scripts/smoke_requirements.txt
+          echo "SMOKE_PYTHON=$RUNNER_TEMP/smoke-venv/bin/python" >> "$GITHUB_ENV"
+
       # The same suite build.yml runs on a push, run against the pushed digest. A release is
       # gated on exactly what a push is gated on, both option sources included -- and
       # `--require-apparmor` is part of "exactly", since this is the run that decides what a user

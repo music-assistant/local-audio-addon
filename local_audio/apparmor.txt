@@ -55,8 +55,9 @@ profile local_audio flags=(attach_disconnected,mediate_deleted) {
   # The oneshot execs this one; common.sh above is only ever sourced.
   /usr/lib/sendspin-cli/decide-daemons ix,
 
-  # bashio's option fetch is an HTTP call to the Supervisor, and hostname
-  # resolution for it needs the datagram pair.
+  # bashio's option fetch is an HTTP call to the Supervisor, and so is the
+  # discovery POST that publishes the pairing token -- curl and jq, both under
+  # /usr/bin above. Hostname resolution for either needs the datagram pair.
   network inet stream,
   network inet6 stream,
   network inet dgram,

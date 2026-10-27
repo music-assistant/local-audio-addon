@@ -1,5 +1,5 @@
 name: Local Audio
-version: "0.2.1"
+version: "0.3.0"
 slug: local_audio
 description: >-
   Turns this Home Assistant system into a synchronized Sendspin player for
@@ -25,17 +25,24 @@ host_network: true
 # gives this app its own Audio selector, which is how a user points it at a USB
 # DAC.
 audio: true
+# Publishes the player's pairing token to Home Assistant Core, the only reader of
+# discovery messages, so Music Assistant can pair without a copy and paste.
+# `hassio_api` at the default role is what posting needs, and costs no rating.
+# The service is the integration's domain: Core routes a message by that name.
+hassio_api: true
+discovery:
+  - music_assistant
 options:
   # Empty rather than absent, so the configuration screen shows the field
   # instead of folding it away as unused. An empty name is the default,
   # "Local Audio".
   name: ""
   log_level: info
-# `server`, `buffer_ms` and the two hooks are optional with no default on
-# purpose, which is what keeps them out of `options:` above and so behind the
-# fold a user has to open deliberately. Setting a `server` switches the player to
-# dialling out, which suppresses its mDNS advertisement. An unset `buffer_ms` has
-# to reach the player as no setting at all rather than as a number written here,
+# `server`, `buffer_ms`, `allow_unpaired` and the two hooks are optional with no
+# default on purpose, which is what keeps them out of `options:` above and so
+# behind the fold a user has to open deliberately. Setting a `server` switches the
+# player to dialling out, which suppresses its mDNS advertisement. An unset
+# `buffer_ms` has to reach the player as no setting at all rather than as a number written here,
 # so that the default stays upstream's to change; the range is upstream's own, so
 # the configuration screen refuses what the player would refuse.
 #
@@ -47,5 +54,6 @@ schema:
   log_level: list(debug|info|warning|error)
   server: str?
   buffer_ms: int(10,2000)?
+  allow_unpaired: bool?
   hook_start: str?
   hook_stop: str?

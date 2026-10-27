@@ -227,6 +227,15 @@ jobs:
             sudo apt-get install --yes --no-install-recommends apparmor
           fi
 
+      # The stand-in Music Assistant server is aiosendspin, since every connection to the player
+      # is now Noise-encrypted and has to be paired. A virtualenv rather than the runner's own
+      # Python, which Ubuntu marks externally managed.
+      - name: Install the smoke test's stand-in server
+        run: |
+          python3 -m venv "$RUNNER_TEMP/smoke-venv"
+          "$RUNNER_TEMP/smoke-venv/bin/pip" install --quiet -r scripts/smoke_requirements.txt
+          echo "SMOKE_PYTHON=$RUNNER_TEMP/smoke-venv/bin/python" >> "$GITHUB_ENV"
+
       # Twice, because the two option sources share no code above `sendspin::read_options`.
       # Standalone is what a Compose user gets; add-on is the bashio branch, which nothing else
       # exercises. The script's own header says what each mode covers.
