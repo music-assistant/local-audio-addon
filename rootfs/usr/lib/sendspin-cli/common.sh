@@ -627,7 +627,7 @@ sendspin::publish_discovery() {
         fi
     done
 
-    sendspin::log "Warning: could not publish this player to Home Assistant for pairing after five attempts. It plays as before; pair it by hand with the token from 'sendspin-cli pair-token'."
+    sendspin::log "Warning: could not publish this player to Home Assistant for pairing after five attempts. It plays as before; pair it by hand with the pairing token logged at startup."
     return 0
 }
 

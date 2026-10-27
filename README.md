@@ -135,8 +135,12 @@ There are three ways in:
   asks to pair a player with a token:
 
   ```sh
-  docker compose exec local-audio sendspin-cli pair-token
+  docker compose exec local-audio sendspin-cli pair-token \
+      --control-socket /run/sendspin-cli/control.sock
   ```
+
+  The socket has to be named: the container sets no `$XDG_RUNTIME_DIR` for the
+  player's default to be found under, and `status` and `pair` need it too.
 
   While nothing is paired the player also logs it once at startup, on a line
   that starts `No server is paired yet. Pairing token`.
