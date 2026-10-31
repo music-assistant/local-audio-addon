@@ -98,13 +98,21 @@ any player or group. Nothing is captured until you play it there.
 - `off` streams nothing, and is the default.
 - `audio_panel` uses the input chosen in this app's **Audio** panel. Restart the
   app after changing it.
+- `named_source` captures the source or sink named in **Input source name**, for
+  what the Audio panel does not offer: naming a sink captures whatever another app
+  or a Bluetooth device is playing to it.
 - `test_tone` streams a 440 Hz tone, to check that the input reaches Music
   Assistant before any hardware is involved.
 
-If `audio_panel` finds no real input, the player still starts and plays as usual.
-It offers no input, and its log says why. Home Assistant's audio system otherwise
-falls back to capturing what this machine is playing, which this app refuses so
-that Music Assistant does not get its own audio back.
+If the input cannot be used, the player still starts and plays as usual. It offers
+no input, and its log says why and lists the sources and sinks it can see, which is
+also the way to find a name to use. That covers a name that is not there, so a
+Bluetooth device has to be connected before the app starts: restart the app once it
+is.
+
+Music Assistant must not get its own audio back, so this app refuses to capture the
+output it plays to. `audio_panel` also refuses to fall back on capturing what this
+machine plays when it has no real input.
 
 ## Connecting to one specific server
 

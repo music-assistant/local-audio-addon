@@ -323,11 +323,14 @@ options instead of the environment.
 
 The app's `input` is a dropdown rather than upstream's value. `test_tone` renders
 as `input = tone`. `audio_panel` renders as `input = pulse`, which captures from
-the `default-source` the Audio panel writes into `client.conf`, but only after the
-run script has checked that source: a monitor or a source PulseAudio no longer
-lists leaves the player running with no input and a line in the log, because the
-first would stream the machine's own output back and the second would stop the
-player.
+the `default-source` the Audio panel writes into `client.conf`. `named_source`
+renders as `input = pulse:<input_source>`, a source or a sink, whose monitor is then
+what is captured. The run script checks either one first: the sink this player plays
+to, or a name PulseAudio does not list, leaves the player running with no input and
+a line in the log naming what it can see, because the first would stream the
+machine's own output back and the second would stop the player. `audio_panel` also
+refuses any monitor, which can only be PulseAudio's fallback on a machine with no
+input, since the panel offers none.
 
 The two hooks are the one option here that is code rather than a value, and they
 are the reason this app's AppArmor profile grants the player an exec at all. The

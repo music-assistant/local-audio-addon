@@ -184,7 +184,7 @@ check_server_default_sink() {
 # ==============================================================================
 
 check_input_source() {
-    local out conf sources
+    local out conf sources sinks own
 
     step 'the input comes from client.conf, with the server default as the fallback'
 
@@ -204,28 +204,51 @@ Default Source: alsa_output.hdmi.monitor')
 
     step 'which sources may be streamed'
 
-    # Real `pactl list short sources`: tab-separated, the name second, a monitor among them.
+    # Real `pactl list short` output: tab-separated, the name second, monitors among them.
+    own=alsa_output.pci-0000_00_1f.3.analog-stereo
     sources=$'0\talsa_output.pci-0000_00_1f.3.analog-stereo.monitor\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tIDLE
-1\talsa_input.usb-Line_In-00.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tSUSPENDED'
+1\talsa_input.usb-Line_In-00.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tSUSPENDED
+2\tbluez_sink.AA_BB.a2dp_sink.monitor\tmodule-bluez5-device.c\ts16le 2ch 44100Hz\tIDLE'
+    sinks=$'0\talsa_output.pci-0000_00_1f.3.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tIDLE
+1\tbluez_sink.AA_BB.a2dp_sink\tmodule-bluez5-device.c\ts16le 2ch 44100Hz\tIDLE'
 
-    out=$(sendspin::input_refusal alsa_input.usb-Line_In-00.analog-stereo "$sources")
+    out=$(sendspin::input_refusal alsa_input.usb-Line_In-00.analog-stereo "$sources" "$sinks" "$own")
     assert_equal '' "$out" 'a real input that PulseAudio lists is accepted'
 
-    out=$(sendspin::input_refusal alsa_output.pci-0000_00_1f.3.analog-stereo.monitor "$sources")
-    assert_equal 'this machine has no audio input to use' "$out" \
-        "a monitor is refused even though it is listed: it is this machine's own output"
+    out=$(sendspin::input_refusal bluez_sink.AA_BB.a2dp_sink "$sources" "$sinks" "$own")
+    assert_equal '' "$out" 'another sink is accepted by its own name'
 
-    out=$(sendspin::input_refusal alsa_input.usb-Gone-00.analog-stereo "$sources")
-    assert_equal 'the input chosen in the Audio panel, alsa_input.usb-Gone-00.analog-stereo, is not among the ones PulseAudio lists' \
-        "$out" 'a source that has gone is refused, by name'
+    out=$(sendspin::input_refusal bluez_sink.AA_BB.a2dp_sink.monitor "$sources" "$sinks" "$own")
+    assert_equal '' "$out" "and by its monitor's: it is not what this player plays to"
+
+    out=$(sendspin::input_refusal "$own.monitor" "$sources" "$sinks" "$own")
+    assert_equal "$own.monitor is the output this player plays to, which would send Music Assistant its own audio" \
+        "$out" "this player's own monitor is refused even though it is listed"
+
+    out=$(sendspin::input_refusal "$own" "$sources" "$sinks" "$own")
+    assert_equal "$own is the output this player plays to, which would send Music Assistant its own audio" \
+        "$out" 'and so is its own sink by name, which captures the same thing'
+
+    out=$(sendspin::input_refusal alsa_input.usb-Gone-00.analog-stereo "$sources" "$sinks" "$own")
+    assert_equal 'alsa_input.usb-Gone-00.analog-stereo is not among the sources and sinks PulseAudio lists' \
+        "$out" 'a name that is not there is refused, by name'
 
     # A name that only occurs as part of another must not pass for the whole one.
-    out=$(sendspin::input_refusal alsa_input.usb-Line_In-00 "$sources")
-    assert_equal 'the input chosen in the Audio panel, alsa_input.usb-Line_In-00, is not among the ones PulseAudio lists' \
+    out=$(sendspin::input_refusal alsa_input.usb-Line_In-00 "$sources" "$sinks" "$own")
+    assert_equal 'alsa_input.usb-Line_In-00 is not among the sources and sinks PulseAudio lists' \
         "$out" 'a partial name is not a match'
 
-    out=$(sendspin::input_refusal '' "$sources")
-    assert_equal 'PulseAudio names no input' "$out" 'no source at all is refused'
+    out=$(sendspin::input_refusal '' "$sources" "$sinks" "$own")
+    assert_equal 'no input is named' "$out" 'no name at all is refused'
+
+    # The fallback a sink that cannot be worked out reads as, with the check still meaningful.
+    out=$(sendspin::input_refusal '.monitor' "$sources" "$sinks" '')
+    assert_equal '.monitor is the output this player plays to, which would send Music Assistant its own audio' \
+        "$out" 'an unknown own sink matches nothing a real name could be'
+
+    out=$(sendspin::pulse_short_names <<< "$sources"$'\n'"$sinks")
+    assert_equal "$own.monitor, alsa_input.usb-Line_In-00.analog-stereo, bluez_sink.AA_BB.a2dp_sink.monitor, $own, bluez_sink.AA_BB.a2dp_sink" \
+        "$out" 'the names to choose from are listed on one line'
 }
 
 # ==============================================================================

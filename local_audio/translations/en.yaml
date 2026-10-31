@@ -15,8 +15,17 @@ configuration:
       Streams audio from this machine to Music Assistant, where it shows up under
       Live Inputs once Music Assistant is paired with this player. audio_panel
       uses the input chosen in this app's Audio panel, such as a line-in or a USB
-      microphone. test_tone streams a 440 Hz tone, to check the path without any
-      hardware. Leave it off if you have nothing to stream.
+      microphone. named_source captures the one named in Input source name, such
+      as another app's output or a Bluetooth device. test_tone streams a 440 Hz
+      tone, to check the path without any hardware. Leave it off if you have
+      nothing to stream.
+  input_source:
+    name: Input source name
+    description: >-
+      Only read when Audio input is named_source. The name of a PulseAudio source
+      or sink; naming a sink captures what is playing to it. If the name is not
+      there when this app starts, the player runs with no input and its log lists
+      the names it can use, so restart the app once the device is connected.
   server:
     name: Music Assistant server
     description: >-

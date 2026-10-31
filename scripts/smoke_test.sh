@@ -662,7 +662,8 @@ retire_player() {
 # the list that dies with it.
 start_player() {
     local name='' output='' log_level='' server='' apparmor='' stream='' data=''
-    local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' input='' hook_start='' hook_stop=''
+    local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' input='' input_source=''
+    local hook_start='' hook_stop=''
     local pair key value
     local -a args
 
@@ -679,6 +680,7 @@ start_player() {
             legacy_id) legacy_id=$value ;;
             allow_unpaired) allow_unpaired=$value ;;
             input) input=$value ;;
+            input_source) input_source=$value ;;
             hook_start) hook_start=$value ;;
             hook_stop) hook_stop=$value ;;
             stream) stream=$value ;;
@@ -728,7 +730,7 @@ start_player() {
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
             "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
-            "allow_unpaired=$allow_unpaired" "input=$input" \
+            "allow_unpaired=$allow_unpaired" "input=$input" "input_source=$input_source" \
             "hook_start=$hook_start" "hook_stop=$hook_stop"
         args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
         args+=(--env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
@@ -1401,6 +1403,13 @@ check_input() {
     container=$PLAYER
     assert_log "$container" 'this player is not offering an input.' \
         'the log says no input is on offer'
+    assert_log "$container" 'listening on port 8928' 'and the player runs without one'
+    refute_config_line "$container" '^input' 'with no input written'
+
+    step 'a named input with nothing to capture'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'input=named_source'         'input_source=bluez_sink.gone'
+    container=$PLAYER
+    assert_log "$container" 'this player is not offering an input.'         'the log says no input is on offer'
     assert_log "$container" 'listening on port 8928' 'and the player runs without one'
     refute_config_line "$container" '^input' 'with no input written'
 }

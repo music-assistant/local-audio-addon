@@ -22,8 +22,9 @@ it is encrypted.
   a server pairs, and this app never writes it to a file.
 - A new **Audio input** setting streams a line-in or microphone to Music
   Assistant, where it shows up under Live Inputs. Off by default. `audio_panel`
-  uses the input chosen in this app's Audio panel, and `test_tone` checks the path
-  without any hardware.
+  uses the input chosen in this app's Audio panel, `named_source` captures a
+  source or sink by name, such as another app's output or a Bluetooth device, and
+  `test_tone` checks the path without any hardware.
 
 ## 0.2.1
 
