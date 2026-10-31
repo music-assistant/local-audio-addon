@@ -1382,9 +1382,9 @@ check_input() {
     step 'the test tone as an input'
     start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "input=$tone"
     container=$PLAYER
+    assert_log "$container" "Input device 'tone' captures" 'the player opens the tone'
     assert_config_line "$container" '^input = tone$' \
-        "$tone reaches the config under the key the player reads"
-    assert_log "$container" "Input device 'tone' captures" 'and the player opens it'
+        "because $tone reached the config under the key the player reads"
 
     [ "$MODE" = addon ] || return 0
 
