@@ -33,7 +33,7 @@ I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspi
 the player is waiting to be picked up in Music Assistant's Sendspin provider,
 which then has to pair with it before it can play — see [Pairing](#pairing).
 
-This image's own configuration is nine environment variables, all optional:
+This image's own configuration is ten environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -45,6 +45,7 @@ This image's own configuration is nine environment variables, all optional:
 | `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
 | `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
 | `SENDSPIN_ALLOW_UNPAIRED` | `false` | `true` lets any server play without pairing |
+| `SENDSPIN_INPUT` | unset | Stream a capture device to the server, see [Streaming an input](#streaming-an-input) |
 | `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:<channels>`, Compose only |
 
 `SENDSPIN_BUFFER_MS` is how much audio the backend keeps queued up. Raise it
@@ -162,6 +163,19 @@ no one to make, and the token covers the same need.
 
 Upstream's [Pairing a Player](https://github.com/Sendspin/sendspin-cpp-cli/wiki/Pairing-a-Player)
 page covers all of it in more detail.
+
+## Streaming an input
+
+`SENDSPIN_INPUT` makes the player a Sendspin source as well: Music Assistant lists
+it under Live Inputs once it is paired, and capture runs only while something
+plays it. The value is upstream's `--input`, such as `hw:1,0`, `pulse:<source>`,
+`pipewire:<node>`, or `tone` for a test tone; `sendspin-cli -l` lists what this
+container can capture. A device that cannot be opened stops the container, the
+same as an output.
+
+A bare `pulse` follows the server's default source, which on a machine with no
+microphone or line-in is the monitor of its output. That streams the machine's
+own audio to the server, so name the source if you are not sure.
 
 ## Choosing an output
 
@@ -303,9 +317,17 @@ passing the matching digest, which is what CI does per architecture. A plain
 ## Home Assistant app
 
 `local_audio/` is the app manifest, wrapping this same image, so the runtime
-behaviour described above is shared. It reads its `name`, `log_level`, `server`,
-`buffer_ms`, `allow_unpaired`, `hook_start` and `hook_stop` from the app options
-instead of the environment.
+behaviour described above is shared. It reads its `name`, `log_level`, `input`,
+`server`, `buffer_ms`, `allow_unpaired`, `hook_start` and `hook_stop` from the app
+options instead of the environment.
+
+The app's `input` is a dropdown rather than upstream's value. `test_tone` renders
+as `input = tone`. `audio_panel` renders as `input = pulse`, which captures from
+the `default-source` the Audio panel writes into `client.conf`, but only after the
+run script has checked that source: a monitor or a source PulseAudio no longer
+lists leaves the player running with no input and a line in the log, because the
+first would stream the machine's own output back and the second would stop the
+player.
 
 The two hooks are the one option here that is code rather than a value, and they
 are the reason this app's AppArmor profile grants the player an exec at all. The

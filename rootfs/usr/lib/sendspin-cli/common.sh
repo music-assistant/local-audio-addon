@@ -18,7 +18,7 @@ sendspin::log() {
 }
 
 # Populate SENDSPIN_NAME, SENDSPIN_OUTPUT, SENDSPIN_LOG_LEVEL, SENDSPIN_SERVER,
-# SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT, SENDSPIN_ALLOW_UNPAIRED,
+# SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT, SENDSPIN_ALLOW_UNPAIRED, SENDSPIN_INPUT,
 # SENDSPIN_HOOK_START and SENDSPIN_HOOK_STOP. Only the source differs between an
 # add-on and a plain container; the defaults below are applied to both so the
 # two cannot drift.
@@ -52,6 +52,15 @@ sendspin::read_options() {
         SENDSPIN_HOOK_START=$(sendspin::option "${config}" 'hook_start')
         SENDSPIN_HOOK_STOP=$(sendspin::option "${config}" 'hook_stop')
 
+        # The dropdown's words, in the player's terms. A bare `pulse` names no
+        # source, so libpulse captures from the client.conf default-source the
+        # Audio panel sets; the run script checks that it is a real input first.
+        case $(sendspin::option "${config}" 'input') in
+            audio_panel) SENDSPIN_INPUT=pulse ;;
+            test_tone) SENDSPIN_INPUT=tone ;;
+            *) SENDSPIN_INPUT='' ;;
+        esac
+
         # Home Assistant's audio is always a PulseAudio server, so the add-on
         # talks to it natively. `default` reaches the same server through ALSA's
         # pulse plugin, whose poll pipe can be left full with nothing to drain it,
@@ -82,6 +91,7 @@ sendspin::read_options() {
     SENDSPIN_AUDIO_FORMAT="${SENDSPIN_AUDIO_FORMAT:-}"
 
     SENDSPIN_ALLOW_UNPAIRED="${SENDSPIN_ALLOW_UNPAIRED:-}"
+    SENDSPIN_INPUT="${SENDSPIN_INPUT:-}"
 
     # Empty rather than defaulted, like the three above: the run script writes
     # only the keys that have a value, so a hook nobody set is absent from the
@@ -97,7 +107,7 @@ sendspin::read_options() {
     # values are shell commands by design, so there is nothing to sanitise
     # within a line: whoever may set an option may already run what they like.
     for name in SENDSPIN_NAME SENDSPIN_OUTPUT SENDSPIN_LOG_LEVEL SENDSPIN_SERVER \
-        SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ALLOW_UNPAIRED \
+        SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ALLOW_UNPAIRED SENDSPIN_INPUT \
         SENDSPIN_HOOK_START SENDSPIN_HOOK_STOP; do
         value="${!name}"
         if [ "${value}" != "${value%%$'\n'*}" ]; then
@@ -270,13 +280,13 @@ sendspin::pactl() {
     LC_ALL=C PULSE_SERVER="unix:${PULSE_SOCKET}" timeout 3 pactl "$@" 2> /dev/null
 }
 
-# `default-sink` from a client.conf on stdin. The Supervisor renders that file
-# per add-on from the Audio panel selection, so this key is the device the user
-# picked. Last assignment wins, as it does for PulseAudio itself.
-sendspin::pulse_conf_default_sink() {
-    awk '
+# A key from a client.conf on stdin. The Supervisor renders that file per add-on
+# from the Audio panel selection, so `default-sink` and `default-source` are the
+# devices the user picked. Last assignment wins, as it does for PulseAudio itself.
+sendspin::pulse_conf_value() {
+    awk -v key="$1" '
         /^[[:space:]]*[;#]/ { next }
-        /^[[:space:]]*default-sink[[:space:]]*=/ {
+        $0 ~ ("^[[:space:]]*" key "[[:space:]]*=") {
             sub(/^[^=]*=[[:space:]]*/, "")
             sub(/[[:space:]]+$/, "")
             value = $0
@@ -285,11 +295,25 @@ sendspin::pulse_conf_default_sink() {
     '
 }
 
+sendspin::pulse_conf_default_sink() {
+    sendspin::pulse_conf_value default-sink
+}
+
+sendspin::pulse_conf_default_source() {
+    sendspin::pulse_conf_value default-source
+}
+
 # The daemon's default sink, from `pactl info` on stdin. Only a fallback: the
 # ALSA pulse plugin connects with a NULL device and libpulse then substitutes
 # the *client* default, so client.conf wins whenever it carries one.
 sendspin::pulse_info_default_sink() {
     sed -n 's/^Default Sink:[[:space:]]*//p' | tail -n 1
+}
+
+# The daemon's default source, from `pactl info` on stdin. As with the sink, only
+# a fallback for a client.conf that names none.
+sendspin::pulse_info_default_source() {
+    sed -n 's/^Default Source:[[:space:]]*//p' | tail -n 1
 }
 
 # Every sink name in `pactl list sinks` on stdin, one per line.
@@ -558,4 +582,57 @@ sendspin::check_output_is_audible() {
     fi
 
     sendspin::report_on_sinks "${target}" "${sinks}"
+}
+
+# ==============================================================================
+# The Audio panel's input.
+#
+# On a machine with no microphone or line-in, PulseAudio's default source is the
+# monitor of the default sink, and the player captures it without complaint. That
+# would stream this machine's own output to Music Assistant, and playing that
+# input back here would feed back on itself. A source that is gone stops the
+# player at startup instead. Neither is worth losing playback over, so both leave
+# the player running with no input and say why.
+# ==============================================================================
+
+# Why this source cannot be streamed, or nothing if it can. $2 is `pactl list
+# short sources`, whose second column is the name.
+sendspin::input_refusal() {
+    local source=$1 sources=$2
+
+    case ${source} in
+        '')
+            printf '%s\n' 'PulseAudio names no input'
+            return 0
+            ;;
+        *.monitor)
+            printf '%s\n' 'this machine has no audio input to use'
+            return 0
+            ;;
+    esac
+
+    if ! awk -F '\t' -v source="${source}" '$2 == source { found = 1 } END { exit !found }' <<< "${sources}"; then
+        printf '%s\n' "the input chosen in the Audio panel, ${source}, is not among the ones PulseAudio lists"
+    fi
+}
+
+# Whether the player should capture the Audio panel's input, saying why not.
+# Bounded by sendspin::pactl, and a PulseAudio that cannot answer reads as no.
+sendspin::audio_panel_has_input() {
+    local sources='' info source='' reason='Home Assistant audio could not be asked'
+
+    if [ -S "${PULSE_SOCKET}" ] && sources=$(sendspin::pactl list short sources); then
+        if [ -r "${PULSE_CLIENT_CONF}" ]; then
+            source=$(sendspin::pulse_conf_default_source < "${PULSE_CLIENT_CONF}")
+        fi
+        if [ -z "${source}" ] && info=$(sendspin::pactl info); then
+            source=$(sendspin::pulse_info_default_source <<< "${info}")
+        fi
+        reason=$(sendspin::input_refusal "${source}" "${sources}")
+    fi
+
+    if [ -n "${reason}" ]; then
+        sendspin::log "Audio input is set to audio_panel, but ${reason}: this player is not offering an input. Choose one in this app's Audio panel and restart it."
+        return 1
+    fi
 }

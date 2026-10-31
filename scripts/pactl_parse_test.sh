@@ -180,6 +180,55 @@ check_server_default_sink() {
 }
 
 # ==============================================================================
+# The Audio panel's input
+# ==============================================================================
+
+check_input_source() {
+    local out conf sources
+
+    step 'the input comes from client.conf, with the server default as the fallback'
+
+    conf='default-sink = alsa_output.usb-Topping_D10s-00.analog-stereo
+; default-source = something-else
+default-source = alsa_input.usb-Line_In-00.analog-stereo'
+    out=$(sendspin::pulse_conf_default_source <<< "$conf")
+    assert_equal 'alsa_input.usb-Line_In-00.analog-stereo' "$out" \
+        'default-source is read, and neither default-sink nor a commented-out one is'
+
+    out=$(sendspin::pulse_conf_default_source <<< 'default-sink = alsa_output.hdmi')
+    assert_equal '' "$out" 'no default-source reads as no answer'
+
+    out=$(sendspin::pulse_info_default_source <<< 'Default Sink: alsa_output.hdmi
+Default Source: alsa_output.hdmi.monitor')
+    assert_equal 'alsa_output.hdmi.monitor' "$out" "the daemon's default source is read from pactl info"
+
+    step 'which sources may be streamed'
+
+    # Real `pactl list short sources`: tab-separated, the name second, a monitor among them.
+    sources=$'0\talsa_output.pci-0000_00_1f.3.analog-stereo.monitor\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tIDLE
+1\talsa_input.usb-Line_In-00.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tSUSPENDED'
+
+    out=$(sendspin::input_refusal alsa_input.usb-Line_In-00.analog-stereo "$sources")
+    assert_equal '' "$out" 'a real input that PulseAudio lists is accepted'
+
+    out=$(sendspin::input_refusal alsa_output.pci-0000_00_1f.3.analog-stereo.monitor "$sources")
+    assert_equal 'this machine has no audio input to use' "$out" \
+        "a monitor is refused even though it is listed: it is this machine's own output"
+
+    out=$(sendspin::input_refusal alsa_input.usb-Gone-00.analog-stereo "$sources")
+    assert_equal 'the input chosen in the Audio panel, alsa_input.usb-Gone-00.analog-stereo, is not among the ones PulseAudio lists' \
+        "$out" 'a source that has gone is refused, by name'
+
+    # A name that only occurs as part of another must not pass for the whole one.
+    out=$(sendspin::input_refusal alsa_input.usb-Line_In-00 "$sources")
+    assert_equal 'the input chosen in the Audio panel, alsa_input.usb-Line_In-00, is not among the ones PulseAudio lists' \
+        "$out" 'a partial name is not a match'
+
+    out=$(sendspin::input_refusal '' "$sources")
+    assert_equal 'PulseAudio names no input' "$out" 'no source at all is refused'
+}
+
+# ==============================================================================
 # Reading a sink's state
 # ==============================================================================
 
@@ -692,6 +741,7 @@ main() {
 
     check_client_conf_default_sink
     check_server_default_sink
+    check_input_source
     check_sink_state
     check_mute_and_level
     check_garbage_is_no_answer

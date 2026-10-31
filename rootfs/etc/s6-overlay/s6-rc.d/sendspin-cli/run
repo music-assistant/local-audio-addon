@@ -9,6 +9,13 @@ sendspin::warn_if_output_changed_meaning
 
 sendspin::warn_if_id_is_set
 
+# Only the add-on's own audio_panel choice: under Compose the value is what the
+# user wrote, and upstream reports a device it cannot open by itself.
+if [ -n "${SUPERVISOR_TOKEN:-}" ] && [ "${SENDSPIN_INPUT}" = pulse ] \
+    && ! sendspin::audio_panel_has_input; then
+    SENDSPIN_INPUT=''
+fi
+
 decision=$(sendspin::daemon_decision)
 
 if [ "${decision}" = 'yes' ]; then
@@ -44,6 +51,9 @@ install -m 600 /dev/null "${SENDSPIN_CONF}"
     fi
     if [ "${SENDSPIN_ALLOW_UNPAIRED}" = true ]; then
         printf 'allow-unpaired = true\n'
+    fi
+    if [ -n "${SENDSPIN_INPUT}" ]; then
+        printf 'input = %s\n' "${SENDSPIN_INPUT}"
     fi
     if [ -n "${SENDSPIN_HOOK_START}" ]; then
         printf 'hook-start = %s\n' "${SENDSPIN_HOOK_START}"

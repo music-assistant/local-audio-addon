@@ -9,6 +9,14 @@ configuration:
     description: >-
       How much this player writes to its log. Raise it to debug while chasing a
       problem, and put it back afterwards.
+  input:
+    name: Audio input
+    description: >-
+      Streams audio from this machine to Music Assistant, where it shows up under
+      Live Inputs once Music Assistant is paired with this player. audio_panel
+      uses the input chosen in this app's Audio panel, such as a line-in or a USB
+      microphone. test_tone streams a 440 Hz tone, to check the path without any
+      hardware. Leave it off if you have nothing to stream.
   server:
     name: Music Assistant server
     description: >-

@@ -20,6 +20,10 @@ it is encrypted.
   player. It is off by default, and best left that way.
 - The pairing token is a password for this player. It is in the log only until
   a server pairs, and this app never writes it to a file.
+- A new **Audio input** setting streams a line-in or microphone to Music
+  Assistant, where it shows up under Live Inputs. Off by default. `audio_panel`
+  uses the input chosen in this app's Audio panel, and `test_tone` checks the path
+  without any hardware.
 
 ## 0.2.1
 

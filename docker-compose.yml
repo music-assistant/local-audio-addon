@@ -72,6 +72,11 @@ services:
       # Pairing section covers how. `true` lets any server on the network play
       # without pairing, and anything but true or false stops the container.
       # SENDSPIN_ALLOW_UNPAIRED: "false"
+      # Stream a capture device to Music Assistant, which lists it under Live
+      # Inputs once paired. `sendspin-cli -l` lists what this container can
+      # capture, and `tone` is a test tone. A device that cannot be opened stops
+      # the container.
+      # SENDSPIN_INPUT: hw:1,0
       # Run a shell command when a stream starts and when it stops -- switching
       # an amplifier relay on and off again is what these are for. The value is
       # a command, not data: it is handed to `sh -c` inside the container and

@@ -31,6 +31,8 @@ options:
   # "Local Audio".
   name: ""
   log_level: info
+  # Quoted because a bare `off` is a YAML boolean, which the list below refuses.
+  input: "off"
 # `server`, `buffer_ms`, `allow_unpaired` and the two hooks are optional with no
 # default on purpose, which is what keeps them out of `options:` above and so
 # behind the fold a user has to open deliberately. Setting a `server` switches the
@@ -45,6 +47,7 @@ options:
 schema:
   name: str?
   log_level: list(debug|info|warning|error)
+  input: list(off|audio_panel|test_tone)
   server: str?
   buffer_ms: int(10,2000)?
   allow_unpaired: bool?

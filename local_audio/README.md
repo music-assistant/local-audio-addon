@@ -88,6 +88,24 @@ If you need exclusive, bit-perfect access to a DAC, run the container version of
 this player instead of the app. See the
 [repository README](https://github.com/music-assistant/local-audio-addon).
 
+## Streaming an input to Music Assistant
+
+**Audio input** sends audio from this machine to Music Assistant, for a turntable
+on a line-in or a microphone in a room. It shows up under **Live Inputs** in Music
+Assistant, once Music Assistant is paired with this player, and can be played on
+any player or group. Nothing is captured until you play it there.
+
+- `off` streams nothing, and is the default.
+- `audio_panel` uses the input chosen in this app's **Audio** panel. Restart the
+  app after changing it.
+- `test_tone` streams a 440 Hz tone, to check that the input reaches Music
+  Assistant before any hardware is involved.
+
+If `audio_panel` finds no real input, the player still starts and plays as usual.
+It offers no input, and its log says why. Home Assistant's audio system otherwise
+falls back to capturing what this machine is playing, which this app refuses so
+that Music Assistant does not get its own audio back.
+
 ## Connecting to one specific server
 
 Leave **Music Assistant server** empty unless discovery genuinely does not work.
