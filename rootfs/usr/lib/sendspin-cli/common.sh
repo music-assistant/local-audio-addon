@@ -24,9 +24,9 @@ sendspin::log() {
 # Populate SENDSPIN_NAME, SENDSPIN_OUTPUT, SENDSPIN_LOG_LEVEL, SENDSPIN_SERVER,
 # SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT, SENDSPIN_ALLOW_UNPAIRED,
 # SENDSPIN_HOOK_START, SENDSPIN_HOOK_STOP, SENDSPIN_LOCAL_PAIRING,
-# SENDSPIN_LOCAL_PAIRING_ADDRESS and SENDSPIN_LOCAL_PAIRING_PORT. Only the source differs between an
-# add-on and a plain container; the defaults below are applied to both so the
-# two cannot drift.
+# SENDSPIN_LOCAL_PAIRING_ADDRESS and SENDSPIN_LOCAL_PAIRING_PORT. Only the
+# source differs between an add-on and a plain container; the defaults below
+# are applied to both so the two cannot drift.
 #
 # Stops the container on a value that would inject configuration keys, and on a
 # buffer the player would reject, rather than returning either to the caller.
