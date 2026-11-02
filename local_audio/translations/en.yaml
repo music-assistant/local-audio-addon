@@ -29,6 +29,18 @@ configuration:
       Off by default, and best left off: a server has to pair with this player
       before it can play on it. Turn it on only to let any server on your
       network play here without pairing.
+  local_pairing:
+    name: Pair with Music Assistant on this machine
+    description: >-
+      On by default: a Music Assistant app on this same Home Assistant system
+      pairs with this player by itself, with no token to copy. The token is
+      offered only on Home Assistant's internal network, which nothing else on
+      your network can reach. Turn it off to pair by hand instead.
+  local_pairing_port:
+    name: Local pairing port
+    description: >-
+      The port the pairing token is offered on, 8929 when left empty. Change it
+      only if the log says the port is already in use.
   hook_start:
     name: Command to run when playback starts
     description: >-

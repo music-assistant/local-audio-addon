@@ -33,7 +33,7 @@ I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspi
 the player is waiting to be picked up in Music Assistant's Sendspin provider,
 which then has to pair with it before it can play — see [Pairing](#pairing).
 
-This image's own configuration is nine environment variables, all optional:
+This image's own configuration is twelve environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -45,6 +45,9 @@ This image's own configuration is nine environment variables, all optional:
 | `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
 | `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
 | `SENDSPIN_ALLOW_UNPAIRED` | `false` | `true` lets any server play without pairing |
+| `SENDSPIN_LOCAL_PAIRING` | `false` | `true` serves the pairing token on one address, see [Pairing](#pairing) |
+| `SENDSPIN_LOCAL_PAIRING_ADDRESS` | unset | The one address the token is served on; required when the above is `true` |
+| `SENDSPIN_LOCAL_PAIRING_PORT` | `8929` | The port it is served on |
 | `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:<channels>`, Compose only |
 
 `SENDSPIN_BUFFER_MS` is how much audio the backend keeps queued up. Raise it
@@ -151,6 +154,16 @@ There are three ways in:
 - **`SENDSPIN_ALLOW_UNPAIRED=true`** skips pairing entirely, and lets any server
   on the network play. It renders as `allow-unpaired = true`, and anything but
   `true` or `false` stops the container with a line naming the value.
+- **Local pairing.** `SENDSPIN_LOCAL_PAIRING=true` serves the token over HTTP
+  on `SENDSPIN_LOCAL_PAIRING_ADDRESS` and `SENDSPIN_LOCAL_PAIRING_PORT`, and
+  advertises the port to every server that connects, so a Music Assistant that
+  can reach that address fetches the token and pairs by itself. It renders as
+  `pairing-token-endpoint = <address>:<port>`. Anything that can reach the
+  address can pair with this player, so it must be one only Music Assistant's
+  host can reach; there is no default here for that reason, and `true` with no
+  address stops the container. While it is on, the token is not logged at
+  startup. The Home Assistant app turns this on by itself, on Home Assistant
+  OS's internal network.
 
 **Treat the token like a password.** It does not change for as long as `/data`
 is kept, and anyone who has it can pair a server with this player. It stops
@@ -304,8 +317,14 @@ passing the matching digest, which is what CI does per architecture. A plain
 
 `local_audio/` is the app manifest, wrapping this same image, so the runtime
 behaviour described above is shared. It reads its `name`, `log_level`, `server`,
-`buffer_ms`, `allow_unpaired`, `hook_start` and `hook_stop` from the app options
-instead of the environment.
+`buffer_ms`, `allow_unpaired`, `local_pairing`, `local_pairing_port`,
+`hook_start` and `hook_stop` from the app options instead of the environment.
+
+`local_pairing` is on by default there, and binds the endpoint to `172.30.32.1`,
+the host's side of Home Assistant OS's `hassio` network: Music Assistant runs on
+the same host, and nothing on the LAN can reach that address. A host without
+that address leaves it off and says so in the log, and the token is then logged
+at startup as before.
 
 The two hooks are the one option here that is code rather than a value, and they
 are the reason this app's AppArmor profile grants the player an exec at all. The

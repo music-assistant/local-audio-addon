@@ -663,6 +663,7 @@ retire_player() {
 start_player() {
     local name='' output='' log_level='' server='' apparmor='' stream='' data=''
     local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' hook_start='' hook_stop=''
+    local local_pairing='' local_pairing_port='' local_pairing_address=''
     local pair key value
     local -a args
 
@@ -680,6 +681,9 @@ start_player() {
             allow_unpaired) allow_unpaired=$value ;;
             hook_start) hook_start=$value ;;
             hook_stop) hook_stop=$value ;;
+            local_pairing) local_pairing=$value ;;
+            local_pairing_port) local_pairing_port=$value ;;
+            local_pairing_address) local_pairing_address=$value ;;
             stream) stream=$value ;;
             apparmor) apparmor=$value ;;
             data) data=$value ;;
@@ -721,13 +725,20 @@ start_player() {
         args+=(--volume "$data:/data")
     fi
 
+    # Not an option in either mode, so delivered the same way in both: the add-on's default is the
+    # hassio bridge, which no container here has.
+    if [ -n "$local_pairing_address" ]; then
+        args+=(--env "SENDSPIN_LOCAL_PAIRING_ADDRESS=$local_pairing_address")
+    fi
+
     # `audio_format` is served here too, though it is not an add-on option: a check can then
     # assert that the add-on does not take it even when a Supervisor offers it, which is a
     # stronger statement about the split than never offering it would be.
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
             "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
-            "allow_unpaired=$allow_unpaired" "hook_start=$hook_start" "hook_stop=$hook_stop"
+            "allow_unpaired=$allow_unpaired" "hook_start=$hook_start" "hook_stop=$hook_stop" \
+            "local_pairing=$local_pairing" "local_pairing_port=$local_pairing_port"
         args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
         args+=(--env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
         args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
@@ -744,6 +755,10 @@ start_player() {
         fi
         if [ -n "$hook_start" ]; then args+=(--env "SENDSPIN_HOOK_START=$hook_start"); fi
         if [ -n "$hook_stop" ]; then args+=(--env "SENDSPIN_HOOK_STOP=$hook_stop"); fi
+        if [ -n "$local_pairing" ]; then args+=(--env "SENDSPIN_LOCAL_PAIRING=$local_pairing"); fi
+        if [ -n "$local_pairing_port" ]; then
+            args+=(--env "SENDSPIN_LOCAL_PAIRING_PORT=$local_pairing_port")
+        fi
     fi
 
     CONTAINERS+=("$PLAYER")
@@ -1362,6 +1377,111 @@ check_allow_unpaired() {
         'the log names the value it refused, and why'
 }
 
+# ==============================================================================
+# Local pairing
+# ==============================================================================
+
+# `GET /pairing-token` on address:port from inside the container, printing whatever came back,
+# and failing only if nothing accepted the connection. bash's /dev/tcp because the image ships no
+# HTTP client, and from inside because the address under test may be the container's loopback.
+fetch_pairing_token() {
+    local container=$1 address=$2 port=$3
+    # shellcheck disable=SC2016 # expanded by the bash inside the container
+    docker exec "$container" timeout 10 bash -c '
+        exec 3<>"/dev/tcp/$1/$2" 2>/dev/null || exit 7
+        printf "GET /pairing-token HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n" "$1" >&3
+        timeout 5 cat <&3 || true
+    ' _ "$address" "$port"
+}
+
+# The container's own address on its Docker network: an interface the endpoint must stay off.
+container_address_of() {
+    docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"
+}
+
+# On Home Assistant OS the endpoint binds the hassio bridge, 172.30.32.1. No container here has
+# that address, so the "on" case names loopback instead: an address the stand-in cannot reach and
+# the container's own network address can then stand for every interface it must stay off.
+check_local_pairing() {
+    local container token reply other
+
+    step 'local pairing left at its default'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL"
+    container=$PLAYER
+    if [ "$MODE" = addon ]; then
+        assert_log "$container" 'Local pairing is off: 172.30.32.1 is not an address of this host' \
+            'the add-on looks for the hassio bridge by default, and says so when it is not there'
+    else
+        assert_log "$container" 'Advertising "' 'the player was started'
+        refute_log "$container" 'Local pairing' 'a plain container leaves local pairing off quietly'
+    fi
+    refute_config_line "$container" '^pairing-token-endpoint' \
+        'and no endpoint reached the rendered config'
+    assert_log "$container" 'No server is paired yet. Pairing token' \
+        'so the token is logged at startup for pairing by hand, as before'
+
+    step 'local pairing on'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' 'local_pairing=true' \
+        'local_pairing_address=127.0.0.1' 'local_pairing_port=8931'
+    container=$PLAYER
+    assert_config_line "$container" '^pairing-token-endpoint = 127\.0\.0\.1:8931$' \
+        'the endpoint reached the rendered config, on the address and port asked for'
+    assert_log "$container" 'Serving the pairing token on http://127.0.0.1:8931/pairing-token' \
+        'the player serves the token there'
+
+    token=$(pairing_token_of "$container")
+    reply=$(fetch_pairing_token "$container" 127.0.0.1 8931) ||
+        fail 'nothing accepted a connection on 127.0.0.1:8931'
+    if [[ $reply != *"\"pairing_token\":\"$token\""* ]]; then
+        fail "the endpoint did not answer with this player's pairing token"
+    fi
+    if [[ $reply != *"\"client_id\":\"$(client_id_of "$container")\""* ]]; then
+        fail "the endpoint did not name this player's client id"
+    fi
+    pass 'it answers with the pairing token and the client id it belongs to'
+
+    other=$(container_address_of "$container")
+    [ -n "$other" ] || fail "could not read the container's network address"
+    if fetch_pairing_token "$container" "$other" 8931 >/dev/null; then
+        fail "the endpoint also answers on $other, an address it was not given"
+    fi
+    pass "and nothing listens on the container's other interface, $other"
+
+    assert_server_reached 'local-pairing 8931' \
+        'the hello lists the local pairing role and advertises the port'
+
+    if grep -F -e "$token" "$(logs_of "$container")" >/dev/null; then
+        fail 'the pairing token is in the container log while local pairing is on'
+    fi
+    pass 'the token is not logged: the startup line points at pair-token instead'
+
+    step 'local pairing turned off'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' 'local_pairing=false' \
+        'local_pairing_address=127.0.0.1'
+    container=$PLAYER
+    assert_server_reached 'local-pairing none' 'the hello carries no local pairing role'
+    refute_config_line "$container" '^pairing-token-endpoint' \
+        'and no endpoint reached the rendered config'
+    if fetch_pairing_token "$container" 127.0.0.1 8929 >/dev/null; then
+        fail 'something answers on 127.0.0.1:8929 with local pairing off'
+    fi
+    pass 'and nothing listens on the default port'
+
+    [ "$MODE" = standalone ] || return 0
+
+    step 'local pairing on with no address'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'local_pairing=true'
+    container=$PLAYER
+    wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+        show_logs "$container"
+        fail 'SENDSPIN_LOCAL_PAIRING=true with no address left the container running'
+    }
+    assert_exit_code "$container" 1 'the container exits 1 rather than guess an address'
+    assert_log "$container" 'SENDSPIN_LOCAL_PAIRING is true but SENDSPIN_LOCAL_PAIRING_ADDRESS is empty' \
+        'the log says what is missing'
+}
+
+
 # An output the host cannot open is the likeliest way for this image to be misconfigured, and the
 # one failure a user cannot see: the Supervisor calls a running container a healthy add-on
 # whatever is crash-looping inside it. So the player's error exit halts the container, and that
@@ -1751,6 +1871,7 @@ main() {
     check_buffer_ms
     check_compose_only_options
     check_allow_unpaired
+    check_local_pairing
     check_crash_visibility
     check_stream_hooks
     check_confined_stop

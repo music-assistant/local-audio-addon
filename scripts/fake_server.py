@@ -21,6 +21,8 @@ there -- a check whose player never connected would otherwise assert the absence
 output and pass:
 
     connected     the player dialled in and finished its handshake
+    local-pairing <port> | local-pairing none
+                  what its client/hello advertised for local pairing
     paired        a pairing with the token from --token-file succeeded
     stream-start  audio was committed to the paired player's group
     stream-end    the stream was stopped
@@ -41,6 +43,8 @@ from aiosendspin.noise.pairing import PairingAttempt
 from aiosendspin.server import AudioFormat, ClientConnectedEvent, SendspinServer
 
 # Silence at CD-ish rates: what the player decodes does not matter, only that a stream ran.
+LOCAL_PAIRING_ROLE = "_ohf_local_pairing@v1"
+
 STREAM_FORMAT = AudioFormat(sample_rate=48000, bit_depth=16, channels=2)
 CHUNK_MS = 100
 
@@ -87,6 +91,15 @@ async def wait_for(predicate, what):
         await asyncio.sleep(POLL_S)
 
 
+def advertised_pairing_port(client):
+    """The port the hello advertised for local pairing, or `none` without the role."""
+    info = client.info
+    if LOCAL_PAIRING_ROLE not in info.supported_roles:
+        return "none"
+    support = info.application_objects.get(f"{LOCAL_PAIRING_ROLE}_support") or {}
+    return support.get("port", "missing")
+
+
 async def run(args):
     def record(outcome):
         with open(args.marker, "a", encoding="utf-8") as handle:
@@ -119,6 +132,9 @@ async def run(args):
 
     await wait_for(lambda: token.client_id in connected, "the player to connect")
     record("connected")
+    hello_from = server.get_client(token.client_id)
+    await wait_for(lambda: hello_from.info_or_none is not None, "the player's hello")
+    record(f"local-pairing {advertised_pairing_port(hello_from)}")
 
     await server.initiate_pairing(
         token.client_id,

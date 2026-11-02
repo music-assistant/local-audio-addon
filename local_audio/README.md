@@ -26,7 +26,8 @@ synchronization protocol built into Music Assistant.
 3. In Music Assistant the player appears by itself, named after this machine —
    usually **homeassistant**. Set **Player name** to something better.
 
-4. Pair Music Assistant with the player — see below.
+4. If Music Assistant runs on this same Home Assistant system, it pairs with
+   the player by itself. Otherwise pair it by hand — see below.
 
 Nothing else needs configuring. Music Assistant finds the player over mDNS and
 connects to it.
@@ -38,12 +39,21 @@ it once before it may play. A server that has not paired can connect but stays
 idle. Pairing is remembered in this app's data, so it survives restarts and
 updates; uninstalling the app forgets it.
 
-There are two ways to pair:
+When Music Assistant runs as an app on this same Home Assistant system, there
+is nothing to do: **Pair with Music Assistant on this machine** is on by
+default, and Music Assistant pairs with the player as soon as it connects. The
+player offers its pairing token only on Home Assistant's internal network, at
+`172.30.32.1`, which the apps on this machine can reach and nothing else on
+your network can. The port is 8929; set **Local pairing port** if the log says
+it is already in use. While this is on, the token is not shown in the log.
 
-- **The pairing token.** While nothing is paired, the log shows it once at
-  startup, on a line that starts `No server is paired yet. Pairing token`. Copy
-  the `SP:0…` string and paste it into Music Assistant where it asks to pair a
-  player with a token.
+For a Music Assistant on another machine, there are two ways to pair:
+
+- **The pairing token.** Turn **Pair with Music Assistant on this machine**
+  off and restart the app. While nothing is paired, the log then shows the
+  token once at startup, on a line that starts `No server is paired yet.
+  Pairing token`. Copy the `SP:0…` string and paste it into Music Assistant
+  where it asks to pair a player with a token.
 - **A 6-digit code.** Ask Music Assistant to pair with a code. The player makes
   one up for that attempt and logs it as `*** Pairing code: 123456 ***`; type it
   into Music Assistant.

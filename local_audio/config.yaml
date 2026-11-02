@@ -31,9 +31,10 @@ options:
   # "Local Audio".
   name: ""
   log_level: info
-# `server`, `buffer_ms`, `allow_unpaired` and the two hooks are optional with no
-# default on purpose, which is what keeps them out of `options:` above and so
-# behind the fold a user has to open deliberately. Setting a `server` switches the
+  local_pairing: true
+# `server`, `buffer_ms`, `allow_unpaired`, `local_pairing_port` and the two
+# hooks are optional with no default on purpose, which is what keeps them out of
+# `options:` above and so behind the fold a user has to open deliberately. Setting a `server` switches the
 # player to dialling out, which suppresses its mDNS advertisement. An unset
 # `buffer_ms` has to reach the player as no setting at all rather than as a number written here,
 # so that the default stays upstream's to change; the range is upstream's own, so
@@ -48,5 +49,7 @@ schema:
   server: str?
   buffer_ms: int(10,2000)?
   allow_unpaired: bool?
+  local_pairing: bool
+  local_pairing_port: port?
   hook_start: str?
   hook_stop: str?
