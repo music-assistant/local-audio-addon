@@ -20,6 +20,11 @@ it is encrypted.
   player. It is off by default, and best left that way.
 - The pairing token is a password for this player. It is in the log only until
   a server pairs, and this app never writes it to a file.
+- **A Music Assistant on the same Home Assistant system pairs by itself.** The
+  new setting **Pair with Music Assistant on this machine**, on by default,
+  offers the pairing token on Home Assistant's internal network only, where
+  Music Assistant fetches it; nothing else on your network can reach it. While
+  it is on, the token is not shown in the log. Turn it off to pair by hand.
 
 ## 0.2.1
 

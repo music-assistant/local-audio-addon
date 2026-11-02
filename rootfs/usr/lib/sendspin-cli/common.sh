@@ -12,6 +12,10 @@ readonly SYSTEM_BUS_SOCKET=/var/run/dbus/system_bus_socket
 readonly AVAHI_SOCKET=/run/avahi-daemon/socket
 readonly PULSE_SOCKET=/run/audio/pulse.sock
 readonly PULSE_CLIENT_CONF=/etc/pulse/client.conf
+# Home Assistant OS's hassio bridge, which only the host and its containers can
+# reach. Music Assistant fetches the pairing token from here and nowhere else.
+readonly HASSIO_ADDRESS=172.30.32.1
+readonly LOCAL_PAIRING_DEFAULT_PORT=8929
 
 sendspin::log() {
     printf '%s\n' "$*" >&2
@@ -19,7 +23,8 @@ sendspin::log() {
 
 # Populate SENDSPIN_NAME, SENDSPIN_OUTPUT, SENDSPIN_LOG_LEVEL, SENDSPIN_SERVER,
 # SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT, SENDSPIN_ALLOW_UNPAIRED,
-# SENDSPIN_HOOK_START and SENDSPIN_HOOK_STOP. Only the source differs between an
+# SENDSPIN_HOOK_START, SENDSPIN_HOOK_STOP, SENDSPIN_LOCAL_PAIRING,
+# SENDSPIN_LOCAL_PAIRING_ADDRESS and SENDSPIN_LOCAL_PAIRING_PORT. Only the source differs between an
 # add-on and a plain container; the defaults below are applied to both so the
 # two cannot drift.
 #
@@ -51,6 +56,14 @@ sendspin::read_options() {
         SENDSPIN_ALLOW_UNPAIRED=$(sendspin::option "${config}" 'allow_unpaired')
         SENDSPIN_HOOK_START=$(sendspin::option "${config}" 'hook_start')
         SENDSPIN_HOOK_STOP=$(sendspin::option "${config}" 'hook_stop')
+        # Not through sendspin::option: jq's `//` takes false for missing too,
+        # which would turn an explicit off back into the default of on.
+        SENDSPIN_LOCAL_PAIRING=$(jq -r 'if .local_pairing == null then true else .local_pairing end' \
+            <<< "${config}")
+        SENDSPIN_LOCAL_PAIRING_PORT=$(sendspin::option "${config}" 'local_pairing_port')
+        # Not an add-on option: only the smoke suite sets it, because its
+        # containers have no hassio bridge to bind to.
+        : "${SENDSPIN_LOCAL_PAIRING_ADDRESS:=${HASSIO_ADDRESS}}"
 
         # Home Assistant's audio is always a PulseAudio server, so the add-on
         # talks to it natively. `default` reaches the same server through ALSA's
@@ -90,6 +103,12 @@ sendspin::read_options() {
     SENDSPIN_HOOK_START="${SENDSPIN_HOOK_START:-}"
     SENDSPIN_HOOK_STOP="${SENDSPIN_HOOK_STOP:-}"
 
+    # Off outside the add-on: a plain container has no address that only Music
+    # Assistant's host can reach, so whoever turns it on has to name one.
+    : "${SENDSPIN_LOCAL_PAIRING:=false}"
+    SENDSPIN_LOCAL_PAIRING_ADDRESS="${SENDSPIN_LOCAL_PAIRING_ADDRESS:-}"
+    : "${SENDSPIN_LOCAL_PAIRING_PORT:=${LOCAL_PAIRING_DEFAULT_PORT}}"
+
     # A newline in a value would add config keys of the caller's choosing, and
     # an injected `server` turns the mDNS advertisement off without saying so.
     #
@@ -98,7 +117,8 @@ sendspin::read_options() {
     # within a line: whoever may set an option may already run what they like.
     for name in SENDSPIN_NAME SENDSPIN_OUTPUT SENDSPIN_LOG_LEVEL SENDSPIN_SERVER \
         SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ALLOW_UNPAIRED \
-        SENDSPIN_HOOK_START SENDSPIN_HOOK_STOP; do
+        SENDSPIN_HOOK_START SENDSPIN_HOOK_STOP SENDSPIN_LOCAL_PAIRING \
+        SENDSPIN_LOCAL_PAIRING_ADDRESS SENDSPIN_LOCAL_PAIRING_PORT; do
         value="${!name}"
         if [ "${value}" != "${value%%$'\n'*}" ]; then
             sendspin::log "${name} contains a newline, which would inject configuration keys."
@@ -141,6 +161,66 @@ sendspin::read_options() {
             exit 1
             ;;
     esac
+
+    case ${SENDSPIN_LOCAL_PAIRING} in
+        true | false) ;;
+        *)
+            sendspin::log "SENDSPIN_LOCAL_PAIRING is \"${SENDSPIN_LOCAL_PAIRING}\", which is neither true nor false."
+            exit 1
+            ;;
+    esac
+
+    # The add-on's `port` schema already refuses these; the length test is the
+    # same 64-bit wrap guard as the buffer check above.
+    case ${SENDSPIN_LOCAL_PAIRING_PORT} in
+        '' | *[!0-9]*)
+            sendspin::log "SENDSPIN_LOCAL_PAIRING_PORT is \"${SENDSPIN_LOCAL_PAIRING_PORT}\", which is not a port number."
+            exit 1
+            ;;
+    esac
+    if [ "${#SENDSPIN_LOCAL_PAIRING_PORT}" -gt 5 ] \
+        || [ "$((10#${SENDSPIN_LOCAL_PAIRING_PORT}))" -lt 1 ] \
+        || [ "$((10#${SENDSPIN_LOCAL_PAIRING_PORT}))" -gt 65535 ]; then
+        sendspin::log "SENDSPIN_LOCAL_PAIRING_PORT is ${SENDSPIN_LOCAL_PAIRING_PORT}, outside 1 to 65535."
+        exit 1
+    fi
+
+    if [ "${SENDSPIN_LOCAL_PAIRING}" = true ] && [ -z "${SENDSPIN_LOCAL_PAIRING_ADDRESS}" ]; then
+        sendspin::log 'SENDSPIN_LOCAL_PAIRING is true but SENDSPIN_LOCAL_PAIRING_ADDRESS is empty: name the one address Music Assistant fetches the pairing token from.'
+        exit 1
+    fi
+}
+
+# Whether $1 is an IPv4 address of this network namespace. The add-on shares
+# the host's, so this is how it tells a Home Assistant OS host, which has the
+# hassio bridge, from one that does not.
+sendspin::has_local_address() {
+    awk -v want="$1" '
+        /\|--/ { address = $2 }
+        /\/32 host LOCAL/ && address == want { found = 1 }
+        END { exit !found }
+    ' /proc/net/fib_trie
+}
+
+# The `pairing-token-endpoint` value, or nothing when local pairing stays off.
+# The hassio address missing is a host without the bridge, not a mistake, so it
+# turns the endpoint off with a line instead of a player that cannot start; an
+# address named outright is passed on, and the player refuses one it cannot
+# bind.
+sendspin::local_pairing_endpoint() {
+    local address=${SENDSPIN_LOCAL_PAIRING_ADDRESS}
+
+    [ "${SENDSPIN_LOCAL_PAIRING}" = true ] || return 0
+
+    if [ "${address}" = "${HASSIO_ADDRESS}" ] && ! sendspin::has_local_address "${address}"; then
+        sendspin::log "Local pairing is off: ${address} is not an address of this host, so there is no Home Assistant OS network to serve the pairing token on."
+        return 0
+    fi
+
+    case ${address} in
+        *:*) address="[${address}]" ;;
+    esac
+    printf '%s:%s\n' "${address}" "$((10#${SENDSPIN_LOCAL_PAIRING_PORT}))"
 }
 
 # Upstream refuses `id =` now that identity is the keypair in the state dir, but
