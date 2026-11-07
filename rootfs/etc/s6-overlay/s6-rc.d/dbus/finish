@@ -1,0 +1,7 @@
+#!/command/with-contenv bash
+set -euo pipefail
+
+source /usr/lib/sendspin-cli/common.sh
+
+# Clean pid and socket files
+rm -f ${SYSTEM_BUS_DIR}/*
