@@ -26,7 +26,7 @@ it is encrypted.
   Music Assistant fetches it, and only until a server has paired; nothing else
   on your network can reach it. While
   it is on, the token is not shown in the log. Turn it off to pair by hand.
-- Home Assistant's audio output can suspend between streams again: the player
+- Home Assistant's audio output can suspend between streams: the player
   no longer holds it open once a stream ends.
 - A change of audio format mid-stream no longer knocks the player out of sync.
 - The player no longer makes hard sync corrections while the system's time

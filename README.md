@@ -33,7 +33,7 @@ I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspi
 the player is waiting to be picked up in Music Assistant's Sendspin provider,
 which then has to pair with it before it can play — see [Pairing](#pairing).
 
-This image's own configuration is twelve environment variables, all optional:
+This image's own configuration is sixteen environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
