@@ -1442,10 +1442,11 @@ check_local_pairing() {
     start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'local_pairing=true' \
         'local_pairing_address=127.0.0.1' 'local_pairing_port=8931'
     container=$PLAYER
-    assert_config_line "$container" '^pairing-token-endpoint = 127\.0\.0\.1:8931$' \
-        'the endpoint reached the rendered config, on the address and port asked for'
+    # Logged by the player, so the config it read is already written.
     assert_log "$container" 'Serving the pairing token on http://127.0.0.1:8931/ until a server pairs' \
         'the player serves the token there'
+    assert_config_line "$container" '^pairing-token-endpoint = 127\.0\.0\.1:8931$' \
+        'because the endpoint reached the rendered config, on the address and port asked for'
 
     token=$(pairing_token_of "$container")
     reply=$(fetch_pairing_token "$container" 127.0.0.1 8931) ||
