@@ -954,7 +954,7 @@ unload_apparmor_profile() {
 # bundled dbus, avahi-daemon, and the avahi-compat shim the player registers through -- so it is
 # asserted end to end as well as by its parts.
 check_advertise_mode() {
-    local container mode status_out devices_out token
+    local container mode status_out devices_out tui_out token
     step 'advertise mode'
     start_player "name=$PLAYER_NAME" 'output=null' "log_level=$PLAYER_LOG_LEVEL"
     container=$PLAYER
@@ -1071,6 +1071,15 @@ check_advertise_mode() {
         fail 'the shipped player does not offer all five backends this image builds'
     fi
     pass 'the shipped player offers null, stdout, alsa, pulse and pipewire'
+
+    # Built with SENDSPIN_CLI_WITH_TUI=OFF, and the configure log has no line to grep for it.
+    tui_out="$WORK_DIR/${container}.tui"
+    if docker exec "$container" sendspin-cli tui >"$tui_out" 2>&1 ||
+        ! grep -F -e 'this build has no TUI' "$tui_out" >/dev/null; then
+        cat "$tui_out" >&2
+        fail 'the shipped player has a tui subcommand, which this headless image does not build'
+    fi
+    pass 'the shipped player was built without the TUI'
 
     # And the runtime half, which the list above genuinely cannot answer for: every backend
     # library is linked rather than dlopened, so a runtime stage missing one gives a binary that
