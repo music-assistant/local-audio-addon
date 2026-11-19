@@ -1424,11 +1424,12 @@ check_local_pairing() {
     step 'local pairing left at its default'
     start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL"
     container=$PLAYER
+    # Logged once the config is written, which the reads below need.
+    assert_log "$container" 'Advertising "' 'the player was started'
     if [ "$MODE" = addon ]; then
         assert_log "$container" 'Local pairing is off: 172.30.32.1 is not an address of this host' \
             'the add-on looks for the hassio bridge by default, and says so when it is not there'
     else
-        assert_log "$container" 'Advertising "' 'the player was started'
         refute_log "$container" 'Local pairing' 'a plain container leaves local pairing off quietly'
     fi
     refute_config_line "$container" '^pairing-token-endpoint' \
