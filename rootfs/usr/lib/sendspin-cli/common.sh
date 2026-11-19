@@ -24,7 +24,9 @@ sendspin::log() {
 # Populate SENDSPIN_NAME, SENDSPIN_OUTPUT, SENDSPIN_LOG_LEVEL, SENDSPIN_SERVER,
 # SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT, SENDSPIN_ALLOW_UNPAIRED,
 # SENDSPIN_HOOK_START, SENDSPIN_HOOK_STOP, SENDSPIN_LOCAL_PAIRING,
-# SENDSPIN_LOCAL_PAIRING_ADDRESS and SENDSPIN_LOCAL_PAIRING_PORT. Only the
+# SENDSPIN_LOCAL_PAIRING_ADDRESS, SENDSPIN_LOCAL_PAIRING_PORT,
+# SENDSPIN_KEEP_OUTPUT_ALIVE, SENDSPIN_RELEASE_DEVICE, SENDSPIN_ALSA_MIXER and
+# SENDSPIN_ALSA_MIXER_CURVE. Only the
 # source differs between an add-on and a plain container; the defaults below
 # are applied to both so the two cannot drift.
 #
@@ -96,6 +98,13 @@ sendspin::read_options() {
 
     SENDSPIN_ALLOW_UNPAIRED="${SENDSPIN_ALLOW_UNPAIRED:-}"
 
+    # Not add-on options, like SENDSPIN_AUDIO_FORMAT: all four act on an ALSA
+    # output only, and the add-on always plays through PulseAudio.
+    SENDSPIN_KEEP_OUTPUT_ALIVE="${SENDSPIN_KEEP_OUTPUT_ALIVE:-}"
+    SENDSPIN_RELEASE_DEVICE="${SENDSPIN_RELEASE_DEVICE:-}"
+    SENDSPIN_ALSA_MIXER="${SENDSPIN_ALSA_MIXER:-}"
+    SENDSPIN_ALSA_MIXER_CURVE="${SENDSPIN_ALSA_MIXER_CURVE:-}"
+
     # Empty rather than defaulted, like the three above: the run script writes
     # only the keys that have a value, so a hook nobody set is absent from the
     # rendered config rather than sitting in it as a key with nothing after it.
@@ -118,7 +127,9 @@ sendspin::read_options() {
     for name in SENDSPIN_NAME SENDSPIN_OUTPUT SENDSPIN_LOG_LEVEL SENDSPIN_SERVER \
         SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ALLOW_UNPAIRED \
         SENDSPIN_HOOK_START SENDSPIN_HOOK_STOP SENDSPIN_LOCAL_PAIRING \
-        SENDSPIN_LOCAL_PAIRING_ADDRESS SENDSPIN_LOCAL_PAIRING_PORT; do
+        SENDSPIN_LOCAL_PAIRING_ADDRESS SENDSPIN_LOCAL_PAIRING_PORT \
+        SENDSPIN_KEEP_OUTPUT_ALIVE SENDSPIN_RELEASE_DEVICE SENDSPIN_ALSA_MIXER \
+        SENDSPIN_ALSA_MIXER_CURVE; do
         value="${!name}"
         if [ "${value}" != "${value%%$'\n'*}" ]; then
             sendspin::log "${name} contains a newline, which would inject configuration keys."
@@ -158,6 +169,39 @@ sendspin::read_options() {
         '' | true | false) ;;
         *)
             sendspin::log "SENDSPIN_ALLOW_UNPAIRED is \"${SENDSPIN_ALLOW_UNPAIRED}\", which is neither true nor false."
+            exit 1
+            ;;
+    esac
+
+    # Upstream's range, checked here for the same reason as the buffer above.
+    if [ -n "${SENDSPIN_KEEP_OUTPUT_ALIVE}" ]; then
+        case ${SENDSPIN_KEEP_OUTPUT_ALIVE} in
+            *[!0-9]*)
+                sendspin::log "SENDSPIN_KEEP_OUTPUT_ALIVE is \"${SENDSPIN_KEEP_OUTPUT_ALIVE}\", which is not a whole number of seconds."
+                exit 1
+                ;;
+        esac
+        if [ "${#SENDSPIN_KEEP_OUTPUT_ALIVE}" -gt 4 ] \
+            || [ "$((10#${SENDSPIN_KEEP_OUTPUT_ALIVE}))" -gt 3600 ]; then
+            sendspin::log "SENDSPIN_KEEP_OUTPUT_ALIVE is ${SENDSPIN_KEEP_OUTPUT_ALIVE}, outside the 0 to 3600 seconds the player accepts."
+            exit 1
+        fi
+    fi
+
+    case ${SENDSPIN_RELEASE_DEVICE} in
+        '' | true | false) ;;
+        *)
+            sendspin::log "SENDSPIN_RELEASE_DEVICE is \"${SENDSPIN_RELEASE_DEVICE}\", which is neither true nor false."
+            exit 1
+            ;;
+    esac
+
+    # SENDSPIN_ALSA_MIXER itself is left to upstream, which refuses it without an
+    # ALSA output and says so in terms of the output it was given.
+    case ${SENDSPIN_ALSA_MIXER_CURVE} in
+        '' | spec | cubic) ;;
+        *)
+            sendspin::log "SENDSPIN_ALSA_MIXER_CURVE is \"${SENDSPIN_ALSA_MIXER_CURVE}\", which is neither spec nor cubic."
             exit 1
             ;;
     esac
