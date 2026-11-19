@@ -44,8 +44,9 @@ is nothing to do: **Pair with Music Assistant on this machine** is on by
 default, and Music Assistant pairs with the player as soon as it connects. The
 player offers its pairing token only on Home Assistant's internal network, at
 `172.30.32.1`, which the apps on this machine can reach and nothing else on
-your network can. The port is 8929; set **Local pairing port** if the log says
-it is already in use. While this is on, the token is not shown in the log.
+your network can, and only until a server has paired. The port is 8929; set
+**Local pairing port** if the log says it is already in use. While this is on,
+the token is not shown in the log.
 
 For a Music Assistant on another machine, there are two ways to pair:
 

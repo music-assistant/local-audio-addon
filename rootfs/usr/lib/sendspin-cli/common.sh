@@ -170,8 +170,9 @@ sendspin::read_options() {
             ;;
     esac
 
-    # The add-on's `port` schema already refuses these; the length test is the
-    # same 64-bit wrap guard as the buffer check above.
+    # The same range as the add-on's `local_pairing_port` schema. The player
+    # refuses a port below 1024, which Music Assistant would never fetch from;
+    # the length test is the same 64-bit wrap guard as the buffer check above.
     case ${SENDSPIN_LOCAL_PAIRING_PORT} in
         '' | *[!0-9]*)
             sendspin::log "SENDSPIN_LOCAL_PAIRING_PORT is \"${SENDSPIN_LOCAL_PAIRING_PORT}\", which is not a port number."
@@ -179,9 +180,9 @@ sendspin::read_options() {
             ;;
     esac
     if [ "${#SENDSPIN_LOCAL_PAIRING_PORT}" -gt 5 ] \
-        || [ "$((10#${SENDSPIN_LOCAL_PAIRING_PORT}))" -lt 1 ] \
+        || [ "$((10#${SENDSPIN_LOCAL_PAIRING_PORT}))" -lt 1024 ] \
         || [ "$((10#${SENDSPIN_LOCAL_PAIRING_PORT}))" -gt 65535 ]; then
-        sendspin::log "SENDSPIN_LOCAL_PAIRING_PORT is ${SENDSPIN_LOCAL_PAIRING_PORT}, outside 1 to 65535."
+        sendspin::log "SENDSPIN_LOCAL_PAIRING_PORT is ${SENDSPIN_LOCAL_PAIRING_PORT}, outside 1024 to 65535."
         exit 1
     fi
 

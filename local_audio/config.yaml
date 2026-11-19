@@ -50,6 +50,6 @@ schema:
   buffer_ms: int(10,2000)?
   allow_unpaired: bool?
   local_pairing: bool
-  local_pairing_port: port?
+  local_pairing_port: int(1024,65535)?
   hook_start: str?
   hook_stop: str?

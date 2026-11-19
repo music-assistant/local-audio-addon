@@ -1381,17 +1381,33 @@ check_allow_unpaired() {
 # Local pairing
 # ==============================================================================
 
-# `GET /pairing-token` on address:port from inside the container, printing whatever came back,
-# and failing only if nothing accepted the connection. bash's /dev/tcp because the image ships no
+# `GET /` on address:port from inside the container, printing whatever came back, and failing
+# only if nothing accepted the connection. bash's /dev/tcp because the image ships no
 # HTTP client, and from inside because the address under test may be the container's loopback.
 fetch_pairing_token() {
     local container=$1 address=$2 port=$3
     # shellcheck disable=SC2016 # expanded by the bash inside the container
     docker exec "$container" timeout 10 bash -c '
         exec 3<>"/dev/tcp/$1/$2" 2>/dev/null || exit 7
-        printf "GET /pairing-token HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n" "$1" >&3
+        printf "GET / HTTP/1.1\r\nHost: %s:%s\r\nConnection: close\r\n\r\n" "$1" "$2" >&3
         timeout 5 cat <&3 || true
     ' _ "$address" "$port"
+}
+
+# A token served after a pairing would let whoever fetched it pair a second server.
+wait_for_endpoint_to_close() {
+    local container=$1 address=$2 port=$3
+    local waited=0
+    while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
+        if ! fetch_pairing_token "$container" "$address" "$port" >/dev/null; then
+            pass 'and the endpoint closed once it had'
+            return 0
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    show_logs "$container"
+    fail "the endpoint on $address:$port still answers after a server paired"
 }
 
 # The container's own address on its Docker network: an interface the endpoint must stay off.
@@ -1420,25 +1436,24 @@ check_local_pairing() {
     assert_log "$container" 'No server is paired yet. Pairing token' \
         'so the token is logged at startup for pairing by hand, as before'
 
+    # No stand-in server here: the endpoint closes once one pairs, and the step after this covers
+    # that.
     step 'local pairing on'
-    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' 'local_pairing=true' \
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'local_pairing=true' \
         'local_pairing_address=127.0.0.1' 'local_pairing_port=8931'
     container=$PLAYER
     assert_config_line "$container" '^pairing-token-endpoint = 127\.0\.0\.1:8931$' \
         'the endpoint reached the rendered config, on the address and port asked for'
-    assert_log "$container" 'Serving the pairing token on http://127.0.0.1:8931/pairing-token' \
+    assert_log "$container" 'Serving the pairing token on http://127.0.0.1:8931/ until a server pairs' \
         'the player serves the token there'
 
     token=$(pairing_token_of "$container")
     reply=$(fetch_pairing_token "$container" 127.0.0.1 8931) ||
         fail 'nothing accepted a connection on 127.0.0.1:8931'
-    if [[ $reply != *"\"pairing_token\":\"$token\""* ]]; then
+    if [[ $reply != 'HTTP/1.1 200'* ]] || [[ $reply != *"$token"* ]]; then
         fail "the endpoint did not answer with this player's pairing token"
     fi
-    if [[ $reply != *"\"client_id\":\"$(client_id_of "$container")\""* ]]; then
-        fail "the endpoint did not name this player's client id"
-    fi
-    pass 'it answers with the pairing token and the client id it belongs to'
+    pass 'it answers with the pairing token'
 
     other=$(container_address_of "$container")
     [ -n "$other" ] || fail "could not read the container's network address"
@@ -1447,13 +1462,19 @@ check_local_pairing() {
     fi
     pass "and nothing listens on the container's other interface, $other"
 
-    assert_server_reached 'local-pairing 8931' \
-        'the hello lists the local pairing role and advertises the port'
-
     if grep -F -e "$token" "$(logs_of "$container")" >/dev/null; then
         fail 'the pairing token is in the container log while local pairing is on'
     fi
     pass 'the token is not logged: the startup line points at pair-token instead'
+
+    step 'local pairing on, until a server pairs'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' 'local_pairing=true' \
+        'local_pairing_address=127.0.0.1' 'local_pairing_port=8931'
+    container=$PLAYER
+    assert_server_reached 'local-pairing 8931' \
+        'the hello lists the local pairing role and advertises the port'
+    assert_server_reached 'paired' 'the stand-in server paired with the player'
+    wait_for_endpoint_to_close "$container" 127.0.0.1 8931
 
     step 'local pairing turned off'
     start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' 'local_pairing=false' \

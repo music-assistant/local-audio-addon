@@ -4,7 +4,7 @@
 # Temporarily the branch of Sendspin/sendspin-cpp-cli#110, for the local pairing
 # endpoint. Re-pin to the release that carries it before this merges.
 ARG SENDSPIN_CLI_REF=chrisuthe/task/serve-the-pairing-token-on-an-internal-endpoint
-ARG SENDSPIN_CLI_SHA=71b08096c59a41df50210f98283698adcf3757d6
+ARG SENDSPIN_CLI_SHA=8ab1260a5586a1e9f7c09280e2941811f5513f19
 
 # ghcr.io/home-assistant/amd64-base-debian:trixie, which ships s6-overlay v3 and
 # bashio. CI overrides this with the digest for the architecture it is building;

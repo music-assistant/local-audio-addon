@@ -47,7 +47,7 @@ This image's own configuration is twelve environment variables, all optional:
 | `SENDSPIN_ALLOW_UNPAIRED` | `false` | `true` lets any server play without pairing |
 | `SENDSPIN_LOCAL_PAIRING` | `false` | `true` serves the pairing token on one address, see [Pairing](#pairing) |
 | `SENDSPIN_LOCAL_PAIRING_ADDRESS` | unset | The one address the token is served on; required when the above is `true` |
-| `SENDSPIN_LOCAL_PAIRING_PORT` | `8929` | The port it is served on |
+| `SENDSPIN_LOCAL_PAIRING_PORT` | `8929` | The port it is served on, `1024`–`65535` |
 | `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:<channels>`, Compose only |
 
 `SENDSPIN_BUFFER_MS` is how much audio the backend keeps queued up. Raise it
@@ -157,7 +157,9 @@ There are three ways in:
 - **Local pairing.** `SENDSPIN_LOCAL_PAIRING=true` serves the token over HTTP
   on `SENDSPIN_LOCAL_PAIRING_ADDRESS` and `SENDSPIN_LOCAL_PAIRING_PORT`, and
   advertises the port to every server that connects, so a Music Assistant that
-  can reach that address fetches the token and pairs by itself. It renders as
+  can reach that address fetches the token and pairs by itself. It answers only
+  peers on that address's own subnet, and stops serving, and advertising, once
+  a server has paired. It renders as
   `pairing-token-endpoint = <address>:<port>`. Anything that can reach the
   address can pair with this player, so it must be one only Music Assistant's
   host can reach; there is no default here for that reason, and `true` with no
