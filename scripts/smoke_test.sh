@@ -1334,7 +1334,7 @@ check_buffer_ms() {
 # never offering it would. The format is one a device-less sink advertises, so what is under test
 # is the plumbing rather than a player refusing a shape it could not honour.
 check_compose_only_options() {
-    local container
+    local container case option message value
 
     step 'the Compose-only options'
     start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'audio_format=flac:48000:24:2'
@@ -1379,6 +1379,39 @@ check_compose_only_options() {
         assert_config_line "$container" '^alsa-mixer-curve = cubic$' \
             'the mixer curve reached the rendered config under the key the player reads'
     fi
+
+    # Our own refusals, so standalone only: the add-on never reads these. Each value is one the
+    # player would refuse as well, which is why only the wording proves the early check ran.
+    [ "$MODE" = standalone ] || return 0
+
+    for case in \
+        'keep_output_alive=abc|SENDSPIN_KEEP_OUTPUT_ALIVE is "abc", which is not a whole number of seconds.' \
+        'keep_output_alive=3601|SENDSPIN_KEEP_OUTPUT_ALIVE is 3601, outside the 0 to 3600 seconds the player accepts.' \
+        'release_device=yes|SENDSPIN_RELEASE_DEVICE is "yes", which is neither true nor false.' \
+        'alsa_mixer_curve=linear|SENDSPIN_ALSA_MIXER_CURVE is "linear", which is neither spec nor cubic.'; do
+        option=${case%%|*}
+        message=${case#*|}
+
+        step "the ALSA output option ${option}"
+        start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "$option"
+        container=$PLAYER
+
+        wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+            show_logs "$container"
+            fail "${option} left the container running"
+        }
+        assert_exit_code "$container" 1 "the container exits 1 on ${option}"
+        assert_log "$container" "$message" 'the log names the value it refused, and why'
+    done
+
+    for value in 0 3600; do
+        step "a keep-alive of ${value} seconds"
+        start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "keep_output_alive=${value}"
+        container=$PLAYER
+        assert_log "$container" 'listening on port 8928' 'the player came up on its port'
+        assert_config_line "$container" "^keep-output-alive = ${value}\$" \
+            'the boundary reached the rendered config unchanged'
+    done
 }
 
 # SENDSPIN_ID chose the client id up to 0.3, and upstream now refuses `id =` outright, since the
