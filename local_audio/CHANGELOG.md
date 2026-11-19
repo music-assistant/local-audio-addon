@@ -26,6 +26,9 @@ it is encrypted.
   Music Assistant fetches it, and only until a server has paired; nothing else
   on your network can reach it. While
   it is on, the token is not shown in the log. Turn it off to pair by hand.
+- A container that was stopped and started again, rather than recreated,
+  now advertises itself to Music Assistant again instead of going unseen
+  (#49).
 
 ## 0.2.1
 
