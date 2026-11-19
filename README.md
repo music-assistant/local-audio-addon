@@ -121,7 +121,9 @@ through PulseAudio:
   receiver can still go to standby. `SENDSPIN_RELEASE_DEVICE` turns it off.
 - `SENDSPIN_RELEASE_DEVICE=true` closes the device at each stream end and
   reopens it at the next, for a `hw:` DAC shared with another player on the
-  host. Another app can take it in between, and the next stream is then lost.
+  host. Another app can take it in between; the player then goes without
+  audio until the device is free, retrying in the background, and picks up
+  within the same stream once it is.
 - `SENDSPIN_ALSA_MIXER` drives a hardware mixer, such as `0:Master`, for volume
   and mute instead of scaling the audio in software. `SENDSPIN_ALSA_MIXER_CURVE`
   picks how the volume maps onto it: `spec` by default, or `cubic` to track
