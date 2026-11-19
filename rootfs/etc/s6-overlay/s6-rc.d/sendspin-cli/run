@@ -11,6 +11,9 @@ sendspin::warn_if_id_is_set
 
 decision=$(sendspin::daemon_decision)
 
+# Assigned rather than tested in place, so a failure inside stops the script.
+pairing_endpoint=$(sendspin::local_pairing_endpoint)
+
 if [ "${decision}" = 'yes' ]; then
     sendspin::wait_for_socket "${AVAHI_SOCKET}"
 fi
@@ -53,6 +56,9 @@ install -m 600 /dev/null "${SENDSPIN_CONF}"
     fi
     if [ -n "${SENDSPIN_SERVER}" ]; then
         printf 'server = %s\n' "${SENDSPIN_SERVER}"
+    fi
+    if [ -n "${pairing_endpoint}" ]; then
+        printf 'pairing-token-endpoint = %s\n' "${pairing_endpoint}"
     fi
 } > "${SENDSPIN_CONF}"
 
