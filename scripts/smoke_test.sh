@@ -82,6 +82,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 readonly SCRIPT_DIR
 readonly FAKE_SUPERVISOR="$SCRIPT_DIR/fake_supervisor.py"
 readonly FAKE_SERVER="$SCRIPT_DIR/fake_server.py"
+readonly FAKE_PACTL="$SCRIPT_DIR/fake_pactl.sh"
 readonly SMOKE_PYTHON="${SMOKE_PYTHON:-python3}"
 
 # The add-on's own AppArmor profile. The name it is loaded under is APPARMOR_SLUG, below.
@@ -160,6 +161,7 @@ readonly STOP_BUDGET_S=8
 
 WORK_DIR="$(mktemp -d)"
 readonly HOST_BUS_DIR="$WORK_DIR/bus"
+readonly FAKE_PULSE_DIR="$WORK_DIR/pulse"
 readonly WORK_DIR
 
 # Every container this run creates is named from this, so a run that died without sweeping up
@@ -664,6 +666,7 @@ retire_player() {
 start_player() {
     local name='' output='' log_level='' server='' apparmor='' stream='' data=''
     local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' input='' input_source=''
+    local input_card_profile='' pulse=''
     local hook_start='' hook_stop=''
     local local_pairing='' local_pairing_port='' local_pairing_address=''
     local keep_output_alive='' release_device='' alsa_mixer='' alsa_mixer_curve=''
@@ -685,6 +688,8 @@ start_player() {
             allow_unpaired) allow_unpaired=$value ;;
             input) input=$value ;;
             input_source) input_source=$value ;;
+            input_card_profile) input_card_profile=$value ;;
+            pulse) pulse=$value ;;
             hook_start) hook_start=$value ;;
             hook_stop) hook_stop=$value ;;
             local_pairing) local_pairing=$value ;;
@@ -747,6 +752,18 @@ start_player() {
         *) fail "start_player: host_bus is dir or socket, not '$host_bus'" ;;
     esac
 
+    # A PulseAudio socket and the stand-in pactl that answers on it, in place of the audio
+    # plugin's. Copied out of the repo so that `z` relabels the copy rather than the source.
+    case $pulse in
+        '') ;;
+        fake)
+            start_fake_pulse
+            args+=(--volume "$FAKE_PULSE_DIR:/run/audio:z")
+            args+=(--volume "$WORK_DIR/pactl:/usr/bin/pactl:ro,z")
+            ;;
+        *) fail "start_player: pulse is fake, not '$pulse'" ;;
+    esac
+
     # Not an option in either mode, so delivered the same way in both: the add-on's default is the
     # hassio bridge, which no container here has.
     if [ -n "$local_pairing_address" ]; then
@@ -760,6 +777,7 @@ start_player() {
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
             "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
             "allow_unpaired=$allow_unpaired" "input=$input" "input_source=$input_source" \
+            "input_card_profile=$input_card_profile" \
             "hook_start=$hook_start" "hook_stop=$hook_stop" \
             "local_pairing=$local_pairing" "local_pairing_port=$local_pairing_port" \
             "keep_output_alive=$keep_output_alive" "release_device=$release_device" \
@@ -802,6 +820,21 @@ start_player() {
     if [ -n "$stream" ]; then
         hand_token_to_server "$PLAYER"
     fi
+}
+
+# A socket for the image's `[ -S ]` test to find, left behind by a listener that has gone: the
+# stand-in pactl never connects to it. Fresh per player, so no call log carries over.
+start_fake_pulse() {
+    rm -rf "$FAKE_PULSE_DIR"
+    mkdir -p "$FAKE_PULSE_DIR"
+    python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' \
+        "$FAKE_PULSE_DIR/pulse.sock" || fail 'could not create the stand-in PulseAudio socket'
+    install -m 755 "$FAKE_PACTL" "$WORK_DIR/pactl"
+}
+
+# Every pactl invocation the stand-in answered in `container`, one per line.
+pactl_calls_of() {
+    docker exec "$1" cat /tmp/fake-pactl.calls 2>/dev/null || true
 }
 
 # Replaces the player with a fresh container started exactly as the last one was, leaving the
@@ -1609,6 +1642,62 @@ check_input() {
     assert_log "$container" 'this player is not offering an input.'         'the log says no input is on offer'
     assert_log "$container" 'listening on port 8928' 'and the player runs without one'
     refute_config_line "$container" '^input' 'with no input written'
+
+    check_input_card_profile
+}
+
+# Against the stand-in pactl, which answers as an unplugged HDA card on an output-only profile.
+check_input_card_profile() {
+    local container calls
+    local card=alsa_card.pci-0000_00_1f.3
+    local duplex=output:analog-stereo+input:analog-stereo
+
+    step 'the input card profile left empty'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'input=audio_panel' 'pulse=fake'
+    container=$PLAYER
+    assert_log "$container" 'listening on port 8928' 'the player runs'
+    calls=$(pactl_calls_of "$container")
+    case $calls in
+        *'list short sources'*) pass 'the input check reached the stand-in PulseAudio' ;;
+        *) fail "the input check never reached the stand-in PulseAudio -- calls: $calls" ;;
+    esac
+    case $calls in
+        *'list cards'* | *set-card-profile*) fail "an empty setting still asked about cards -- calls: $calls" ;;
+        *) pass 'and an empty setting asks nothing about cards, let alone switches one' ;;
+    esac
+    refute_log "$container" 'for the audio input' 'nor logs a word about one'
+
+    step 'an input card profile that does not exist'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'input=audio_panel' 'pulse=fake' \
+        "input_card_profile=$card:output:analog-stereo+input:nope"
+    container=$PLAYER
+    assert_log "$container" \
+        "Not switching $card to output:analog-stereo+input:nope for the audio input: $card has no profile called output:analog-stereo+input:nope." \
+        'it is refused with a line naming it'
+    assert_log "$container" "Profiles on $card that keep its output and add an input: $duplex" \
+        'and the line after names the one that would work'
+    assert_log "$container" 'listening on port 8928' 'and the player runs regardless'
+    case $(pactl_calls_of "$container") in
+        *set-card-profile*) fail 'a refused profile was switched to anyway' ;;
+        *) pass 'with no switch attempted' ;;
+    esac
+
+    step 'an input card profile that adds an input'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'input=audio_panel' 'pulse=fake' \
+        "input_card_profile=$card:$duplex"
+    container=$PLAYER
+    assert_log "$container" "Switching $card from output:analog-stereo to $duplex for the audio input." \
+        'the profile before the switch is logged'
+    assert_log "$container" "$card is now on $duplex." 'and the one after'
+    calls=$(pactl_calls_of "$container")
+    case $calls in
+        *"set-card-profile $card $duplex"*) pass 'the card was switched' ;;
+        *) fail "the card was never switched -- calls: $calls" ;;
+    esac
+    case $calls in
+        *send-message*) fail "the profile was made sticky -- calls: $calls" ;;
+        *) pass 'and never made sticky' ;;
+    esac
 }
 
 # ==============================================================================

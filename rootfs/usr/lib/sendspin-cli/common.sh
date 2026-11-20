@@ -23,6 +23,7 @@ sendspin::log() {
 
 # Populate SENDSPIN_NAME, SENDSPIN_OUTPUT, SENDSPIN_LOG_LEVEL, SENDSPIN_SERVER,
 # SENDSPIN_BUFFER_MS, SENDSPIN_AUDIO_FORMAT, SENDSPIN_ALLOW_UNPAIRED, SENDSPIN_INPUT,
+# SENDSPIN_INPUT_CARD_PROFILE,
 # SENDSPIN_HOOK_START, SENDSPIN_HOOK_STOP, SENDSPIN_LOCAL_PAIRING,
 # SENDSPIN_LOCAL_PAIRING_ADDRESS, SENDSPIN_LOCAL_PAIRING_PORT,
 # SENDSPIN_KEEP_OUTPUT_ALIVE, SENDSPIN_RELEASE_DEVICE, SENDSPIN_ALSA_MIXER and
@@ -77,6 +78,7 @@ sendspin::read_options() {
             test_tone) SENDSPIN_INPUT=tone ;;
             *) SENDSPIN_INPUT='' ;;
         esac
+        SENDSPIN_INPUT_CARD_PROFILE=$(sendspin::option "${config}" 'input_card_profile')
 
         # Home Assistant's audio is always a PulseAudio server, so the add-on
         # talks to it natively. `default` reaches the same server through ALSA's
@@ -109,6 +111,9 @@ sendspin::read_options() {
 
     SENDSPIN_ALLOW_UNPAIRED="${SENDSPIN_ALLOW_UNPAIRED:-}"
     SENDSPIN_INPUT="${SENDSPIN_INPUT:-}"
+    # Add-on only: switching a card changes it for every app on the host, which
+    # is not a container's to do to a desktop it shares.
+    SENDSPIN_INPUT_CARD_PROFILE="${SENDSPIN_INPUT_CARD_PROFILE:-}"
 
     # Not add-on options, like SENDSPIN_AUDIO_FORMAT: all four act on an ALSA
     # output only, and the add-on always plays through PulseAudio.
@@ -138,7 +143,7 @@ sendspin::read_options() {
     # within a line: whoever may set an option may already run what they like.
     for name in SENDSPIN_NAME SENDSPIN_OUTPUT SENDSPIN_LOG_LEVEL SENDSPIN_SERVER \
         SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ALLOW_UNPAIRED SENDSPIN_INPUT \
-        SENDSPIN_HOOK_START SENDSPIN_HOOK_STOP SENDSPIN_LOCAL_PAIRING \
+        SENDSPIN_INPUT_CARD_PROFILE SENDSPIN_HOOK_START SENDSPIN_HOOK_STOP SENDSPIN_LOCAL_PAIRING \
         SENDSPIN_LOCAL_PAIRING_ADDRESS SENDSPIN_LOCAL_PAIRING_PORT \
         SENDSPIN_KEEP_OUTPUT_ALIVE SENDSPIN_RELEASE_DEVICE SENDSPIN_ALSA_MIXER \
         SENDSPIN_ALSA_MIXER_CURVE; do
@@ -830,4 +835,209 @@ sendspin::app_input_is_usable() {
         fi
         return 1
     fi
+}
+
+# ==============================================================================
+# The input card profile.
+#
+# With nothing plugged into a line-in or mic, its ports lose their priority and
+# the card starts on an output-only profile with no source at all. A duplex
+# profile stays available while its output works, and once active an unplug only
+# marks the source's port not available. PulseAudio switches to any profile it is
+# asked for, including one that is not available or that drops the sink, so the
+# guarding is ours. Never sticky: that would stop automatic switching, headphones
+# included, for every app on the host.
+# ==============================================================================
+
+# From `pactl list cards` on stdin, the card named $1 as tab-separated lines:
+# `active <profile>`, then `profile <name> <sinks> <sources> <available>` per
+# profile. Prints nothing when that card is not listed.
+sendspin::pulse_card_profiles() {
+    awk -v target="$1" '
+        function value(line) {
+            sub(/^[^:]*:[[:space:]]*/, "", line)
+            sub(/[[:space:]]+$/, "", line)
+            return line
+        }
+
+        /^Card #/ { in_card = 0; section = ""; next }
+        /^\tName:/ { in_card = (value($0) == target); next }
+        !in_card { next }
+
+        /^\t[^\t]/ {
+            section = $0
+            sub(/^\t/, "", section)
+            sub(/:.*/, "", section)
+            if (section == "Active Profile") print "active\t" value($0)
+            next
+        }
+
+        # Profile names carry colons of their own, but never one followed by a
+        # space. The counts are in the last bracket, as a description can have
+        # brackets too.
+        section == "Profiles" && /^\t\t[^\t]/ {
+            line = $0
+            sub(/^\t\t/, "", line)
+            at = index(line, ": ")
+            if (!at) next
+            name = substr(line, 1, at - 1)
+            stats = line
+            while ((at = index(stats, "(")) > 0) stats = substr(stats, at + 1)
+            sinks = sources = available = ""
+            if (match(stats, /sinks: [0-9]+/)) sinks = substr(stats, RSTART + 7, RLENGTH - 7)
+            if (match(stats, /sources: [0-9]+/)) sources = substr(stats, RSTART + 9, RLENGTH - 9)
+            if (match(stats, /available: [a-z]+/)) available = substr(stats, RSTART + 11, RLENGTH - 11)
+            print "profile\t" name "\t" sinks "\t" sources "\t" available
+        }
+    '
+}
+
+# The `output:` (or, with $1 = input, `input:`) half of the mixer profile name
+# $2, empty for none. Fails for a name outside that grammar -- a UCM verb such as
+# `HiFi` -- whose output side cannot be told from its name.
+sendspin::profile_side() {
+    local want=$1 name=$2 part side=''
+    local -a parts
+
+    [ "${name}" = off ] && return 0
+    IFS=+ read -r -a parts <<< "${name}"
+    for part in "${parts[@]}"; do
+        case ${part} in
+            output:?* | input:?*) ;;
+            *) return 1 ;;
+        esac
+        if [ "${part%%:*}" = "${want}" ]; then
+            side="${side:+${side}+}${part}"
+        fi
+    done
+    printf '%s\n' "${side}"
+}
+
+# What to do about switching card $1 to profile $2, given `pactl list cards` in
+# $3: `switch`, `already`, or `refuse` and the reason on the next line. Kept
+# apart from the pactl calls so the decision can be tested on canned output.
+sendspin::card_profile_plan() {
+    local card=$1 profile=$2 cards=$3
+    local parsed active='' kind name sinks sources available
+    local found='' want_sources='' want_available='' active_out want_out want_in
+
+    parsed=$(sendspin::pulse_card_profiles "${card}" <<< "${cards}")
+    if [ -z "${parsed}" ]; then
+        printf 'refuse\n%s\n' "${card} is not among the cards PulseAudio lists"
+        return 0
+    fi
+
+    while IFS=$'\t' read -r kind name sinks sources available; do
+        case ${kind} in
+            active) active=${name} ;;
+            profile)
+                if [ "${name}" = "${profile}" ]; then
+                    found=1 want_sources=${sources} want_available=${available}
+                fi
+                ;;
+        esac
+    done <<< "${parsed}"
+
+    if [ -z "${found}" ]; then
+        printf 'refuse\n%s\n' "${card} has no profile called ${profile}"
+        return 0
+    fi
+    if [ -z "${active}" ]; then
+        printf 'refuse\n%s\n' "the profile ${card} is on now could not be read"
+        return 0
+    fi
+    if [ "${profile}" = "${active}" ]; then
+        printf 'already\n'
+        return 0
+    fi
+    if [ "${want_available}" = no ]; then
+        printf 'refuse\n%s\n' "${profile} is not available on ${card}"
+        return 0
+    fi
+
+    if ! want_out=$(sendspin::profile_side output "${profile}") \
+        || ! want_in=$(sendspin::profile_side input "${profile}") \
+        || ! active_out=$(sendspin::profile_side output "${active}"); then
+        printf 'refuse\n%s\n' "there is no telling from the names whether ${profile} keeps the output ${card} is on now, ${active:-unknown}"
+        return 0
+    fi
+    if [ -z "${want_in}" ] || [ "${want_sources}" = 0 ]; then
+        printf 'refuse\n%s\n' "${profile} has no input"
+        return 0
+    fi
+    if [ "${want_out}" != "${active_out}" ]; then
+        printf 'refuse\n%s\n' "${profile} would change the output ${card} plays to from ${active_out:-none} to ${want_out:-none}"
+        return 0
+    fi
+
+    printf 'switch\n'
+}
+
+# The active profile of card $1, from `pactl list cards` on stdin.
+sendspin::card_active_profile() {
+    sendspin::pulse_card_profiles "$1" | awk -F '\t' '$1 == "active" { print $2 }'
+}
+
+# The profiles card $1 could be switched to, from `pactl list cards` in $2, on one line.
+sendspin::card_profile_candidates() {
+    local card=$1 cards=$2 name out=''
+    local -a names
+
+    mapfile -t names < <(sendspin::pulse_card_profiles "${card}" <<< "${cards}" \
+        | awk -F '\t' '$1 == "profile" { print $2 }')
+    for name in "${names[@]}"; do
+        if [ "$(sendspin::card_profile_plan "${card}" "${name}" "${cards}")" = switch ]; then
+            out="${out:+${out}, }${name}"
+        fi
+    done
+    printf '%s\n' "${out}"
+}
+
+# Switches a card to SENDSPIN_INPUT_CARD_PROFILE, `<card>:<profile>`, when that is
+# safe, and logs why not otherwise. Card names cannot hold a colon -- PulseAudio's
+# namereg replaces one with `_` -- so the first colon is the separator. Advisory,
+# like the output check: every path returns success.
+sendspin::apply_input_card_profile() {
+    local value=${SENDSPIN_INPUT_CARD_PROFILE} card profile cards plan reason candidates after
+
+    [ -n "${value}" ] || return 0
+
+    card=${value%%:*}
+    profile=${value#*:}
+    if [ "${card}" = "${value}" ] || [ -z "${card}" ] || [ -z "${profile}" ]; then
+        sendspin::log "Not switching a card for the audio input: ${value} is not <card>:<profile>."
+        return 0
+    fi
+
+    if ! [ -S "${PULSE_SOCKET}" ] || ! cards=$(sendspin::pactl list cards); then
+        sendspin::log "Not switching ${card} to ${profile} for the audio input: Home Assistant audio could not be asked."
+        return 0
+    fi
+
+    plan=$(sendspin::card_profile_plan "${card}" "${profile}" "${cards}")
+    case ${plan} in
+        already)
+            sendspin::log "${card} is already on ${profile}, the profile set for the audio input."
+            return 0
+            ;;
+        refuse*)
+            reason=${plan#refuse$'\n'}
+            sendspin::log "Not switching ${card} to ${profile} for the audio input: ${reason}."
+            candidates=$(sendspin::card_profile_candidates "${card}" "${cards}")
+            if [ -n "${candidates}" ]; then
+                sendspin::log "Profiles on ${card} that keep its output and add an input: ${candidates}"
+            fi
+            return 0
+            ;;
+    esac
+
+    sendspin::log "Switching ${card} from $(sendspin::card_active_profile "${card}" <<< "${cards}") to ${profile} for the audio input. This changes the card for every app on this machine; the Audio panel can switch it back."
+    if ! sendspin::pactl set-card-profile "${card}" "${profile}" > /dev/null; then
+        sendspin::log "PulseAudio refused to switch ${card} to ${profile}."
+    fi
+    after=''
+    if cards=$(sendspin::pactl list cards); then
+        after=$(sendspin::card_active_profile "${card}" <<< "${cards}")
+    fi
+    sendspin::log "${card} is now on ${after:-a profile that could not be read}."
 }

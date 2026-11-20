@@ -10,10 +10,13 @@ sendspin::warn_if_output_changed_meaning
 sendspin::warn_if_id_is_set
 
 # Only the add-on's own PulseAudio choices: under Compose the value is what the
-# user wrote, and upstream reports a device it cannot open by itself.
-if [ -n "${SUPERVISOR_TOKEN:-}" ] && [ "${SENDSPIN_INPUT%%:*}" = pulse ] \
-    && ! sendspin::app_input_is_usable; then
-    SENDSPIN_INPUT=''
+# user wrote, and upstream reports a device it cannot open by itself. The card
+# switch goes first, because it is what creates the source the check looks for.
+if [ -n "${SUPERVISOR_TOKEN:-}" ] && [ "${SENDSPIN_INPUT%%:*}" = pulse ]; then
+    sendspin::apply_input_card_profile
+    if ! sendspin::app_input_is_usable; then
+        SENDSPIN_INPUT=''
+    fi
 fi
 
 decision=$(sendspin::daemon_decision)

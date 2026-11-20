@@ -48,11 +48,16 @@ options:
 #
 # `input_source` is a name PulseAudio only knows at run time, so no list could hold
 # it. It is behind the fold because only `named_source` reads it.
+#
+# `input_card_profile` is behind the fold too, because it changes a card for every
+# app on the host. The pattern is PulseAudio's own rule for card names, which is
+# what makes the first colon the separator.
 schema:
   name: str?
   log_level: list(debug|info|warning|error)
   input: list(off|audio_panel|named_source|test_tone)
   input_source: str?
+  input_card_profile: match(^[A-Za-z0-9_.-]+:.+$)?
   server: str?
   buffer_ms: int(10,2000)?
   allow_unpaired: bool?
