@@ -118,6 +118,78 @@ Default Sink: alsa_output.pci-0000_00_1f.3.hdmi-stereo
 Default Source: alsa_output.pci-0000_00_1f.3.hdmi-stereo.monitor
 Cookie: 2966:8795'
 
+# `pactl list cards` from a Home Assistant OS host (PulseAudio 17.0) with nothing plugged into
+# its onboard HDA card: on an output-only profile, so there is no input source, while the duplex
+# profile is available and the input-only one is not. Trimmed to the analog profiles, one HDMI
+# pair, and a port of each kind -- their `Part of profile(s)` lines name profiles too, and must
+# not be read as the profile list.
+readonly CARDS_HDA_UNPLUGGED='Card #0
+	Name: alsa_card.pci-0000_00_1f.3
+	Driver: module-alsa-card.c
+	Owner Module: 6
+	Properties:
+		alsa.card_name = "HDA Intel PCH"
+		device.description = "Built-in Audio"
+	Profiles:
+		input:analog-stereo: Analog Stereo Input (sinks: 0, sources: 1, priority: 65, available: no)
+		output:analog-stereo: Analog Stereo Output (sinks: 1, sources: 0, priority: 39268, available: yes)
+		output:analog-stereo+input:analog-stereo: Analog Stereo Duplex (sinks: 1, sources: 1, priority: 6565, available: yes)
+		output:hdmi-stereo: Digital Stereo (HDMI) Output (sinks: 1, sources: 0, priority: 5900, available: no)
+		output:hdmi-stereo+input:analog-stereo: Digital Stereo (HDMI) Output + Analog Stereo Input (sinks: 1, sources: 1, priority: 5965, available: no)
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+	Active Profile: output:analog-stereo
+	Ports:
+		analog-input-headset-mic: Headset Microphone (type: Headset, priority: 8800, latency offset: 0 usec, availability group: Legacy 1, not available)
+			Properties:
+				device.icon_name = "audio-input-microphone"
+			Part of profile(s): input:analog-stereo, output:analog-stereo+input:analog-stereo, output:hdmi-stereo+input:analog-stereo
+		analog-output-speaker: Speakers (type: Speaker, priority: 10000, latency offset: 0 usec, availability unknown)
+			Properties:
+				device.icon_name = "audio-speakers"
+			Part of profile(s): output:analog-stereo, output:analog-stereo+input:analog-stereo'
+
+# The same host with a USB adapter hotplugged and a headset in the HDA jack, so two cards and
+# the one asked for second. The adapter's analog jacks are empty: its analog duplex is not
+# available, while its S/PDIF output with the analog input is.
+readonly CARDS_USB_AND_HDA='Card #1
+	Name: alsa_card.usb-Generic_CUBILUX_CA7-00
+	Driver: module-alsa-card.c
+	Owner Module: 15
+	Properties:
+		alsa.card_name = "CUBILUX CA7"
+		device.description = "CUBILUX CA7"
+	Profiles:
+		input:analog-stereo: Analog Stereo Input (sinks: 0, sources: 1, priority: 65, available: no)
+		input:iec958-stereo: Digital Stereo (IEC958) Input (sinks: 0, sources: 1, priority: 32823, available: yes)
+		output:analog-stereo: Analog Stereo Output (sinks: 1, sources: 0, priority: 6500, available: no)
+		output:analog-stereo+input:analog-stereo: Analog Stereo Duplex (sinks: 1, sources: 1, priority: 6565, available: no)
+		output:analog-stereo+input:iec958-stereo: Analog Stereo Output + Digital Stereo (IEC958) Input (sinks: 1, sources: 1, priority: 6555, available: yes)
+		output:iec958-stereo: Digital Stereo (IEC958) Output (sinks: 1, sources: 0, priority: 38268, available: yes)
+		output:iec958-stereo+input:analog-stereo: Digital Stereo (IEC958) Output + Analog Stereo Input (sinks: 1, sources: 1, priority: 5565, available: yes)
+		output:iec958-stereo+input:iec958-stereo: Digital Stereo Duplex (IEC958) (sinks: 1, sources: 1, priority: 38323, available: yes)
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+	Active Profile: output:iec958-stereo+input:iec958-stereo
+	Ports:
+		analog-input-mic: Microphone (type: Mic, priority: 8700, latency offset: 0 usec, not available)
+			Part of profile(s): input:analog-stereo, output:analog-stereo+input:analog-stereo, output:iec958-stereo+input:analog-stereo
+
+Card #2
+	Name: alsa_card.pci-0000_00_1f.3
+	Driver: module-alsa-card.c
+	Owner Module: 16
+	Properties:
+		alsa.card_name = "HDA Intel PCH"
+		device.description = "Built-in Audio"
+	Profiles:
+		input:analog-stereo: Analog Stereo Input (sinks: 0, sources: 1, priority: 32833, available: yes)
+		output:analog-stereo: Analog Stereo Output (sinks: 1, sources: 0, priority: 39268, available: yes)
+		output:analog-stereo+input:analog-stereo: Analog Stereo Duplex (sinks: 1, sources: 1, priority: 39333, available: yes)
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+	Active Profile: output:analog-stereo+input:analog-stereo
+	Ports:
+		analog-input-headset-mic: Headset Microphone (type: Headset, priority: 8800, latency offset: 0 usec, availability group: Legacy 1, availability unknown)
+			Part of profile(s): input:analog-stereo, output:analog-stereo+input:analog-stereo'
+
 # ==============================================================================
 # Which sink gets looked at
 # ==============================================================================
@@ -834,6 +906,89 @@ check_end_to_end() {
     esac
 }
 
+# ==============================================================================
+# The input card profile
+# ==============================================================================
+
+# One line per plan, so a whole decision is one assertion.
+plan_of() {
+    sendspin::card_profile_plan "$1" "$2" "$3" | paste -sd '|'
+}
+
+check_card_profiles() {
+    local hda=alsa_card.pci-0000_00_1f.3 usb=alsa_card.usb-Generic_CUBILUX_CA7-00
+
+    step 'reading a card'
+
+    assert_equal "profile	input:analog-stereo	0	1	no
+profile	output:analog-stereo	1	0	yes
+profile	output:analog-stereo+input:analog-stereo	1	1	yes
+profile	output:hdmi-stereo	1	0	no
+profile	output:hdmi-stereo+input:analog-stereo	1	1	no
+profile	off	0	0	yes
+active	output:analog-stereo" "$(sendspin::pulse_card_profiles "$hda" <<< "$CARDS_HDA_UNPLUGGED")" \
+        'every profile, with counts and availability, and not the ports naming them'
+
+    assert_equal 'output:analog-stereo+input:analog-stereo' \
+        "$(sendspin::card_active_profile "$hda" <<< "$CARDS_USB_AND_HDA")" \
+        'the active profile is the named card'"'"'s, not the first card'"'"'s'
+    assert_equal '' "$(sendspin::pulse_card_profiles alsa_card.gone <<< "$CARDS_USB_AND_HDA")" \
+        'a card that is not listed reads as nothing'
+
+    step 'profile names'
+
+    assert_equal 'output:analog-stereo' \
+        "$(sendspin::profile_side output output:analog-stereo+input:analog-stereo)" 'the output side of a duplex'
+    assert_equal 'input:analog-stereo' \
+        "$(sendspin::profile_side input output:analog-stereo+input:analog-stereo)" 'and its input side'
+    assert_equal '' "$(sendspin::profile_side output input:analog-stereo)" 'an input-only profile has no output side'
+    assert_equal '' "$(sendspin::profile_side output off)" 'and off has neither'
+    if sendspin::profile_side output HiFi > /dev/null; then
+        fail 'a UCM verb is not read as having no output'
+    else
+        pass 'a UCM verb is not read as having no output'
+    fi
+
+    step 'deciding a switch'
+
+    assert_equal 'switch' "$(plan_of "$hda" output:analog-stereo+input:analog-stereo "$CARDS_HDA_UNPLUGGED")" \
+        'unplugged, the duplex profile is available and keeps the output'
+    assert_equal "refuse|input:analog-stereo is not available on $hda" \
+        "$(plan_of "$hda" input:analog-stereo "$CARDS_HDA_UNPLUGGED")" \
+        'the input-only profile is not available, which PulseAudio would switch to anyway'
+    assert_equal "refuse|output:hdmi-stereo+input:analog-stereo is not available on $hda" \
+        "$(plan_of "$hda" output:hdmi-stereo+input:analog-stereo "$CARDS_HDA_UNPLUGGED")" \
+        'an unavailable profile is refused before what it would do to the output is weighed'
+    assert_equal 'already' "$(plan_of "$hda" output:analog-stereo "$CARDS_HDA_UNPLUGGED")" \
+        'the profile the card is on needs no switch'
+    assert_equal 'refuse|off has no input' "$(plan_of "$hda" off "$CARDS_HDA_UNPLUGGED")" \
+        'a profile with no input is no use to the input'
+    assert_equal "refuse|$hda has no profile called output:analog-stereo+input:nope" \
+        "$(plan_of "$hda" output:analog-stereo+input:nope "$CARDS_HDA_UNPLUGGED")" \
+        'a profile that does not exist is refused by name'
+    assert_equal 'refuse|alsa_card.gone is not among the cards PulseAudio lists' \
+        "$(plan_of alsa_card.gone output:analog-stereo+input:analog-stereo "$CARDS_HDA_UNPLUGGED")" \
+        'so is a card that does not exist'
+
+    assert_equal 'switch' "$(plan_of "$usb" output:iec958-stereo+input:analog-stereo "$CARDS_USB_AND_HDA")" \
+        'on the USB adapter, adding the analog input to the S/PDIF output it is on'
+    assert_equal "refuse|output:analog-stereo+input:iec958-stereo would change the output $usb plays to from output:iec958-stereo to output:analog-stereo" \
+        "$(plan_of "$usb" output:analog-stereo+input:iec958-stereo "$CARDS_USB_AND_HDA")" \
+        'an available profile that moves the output is refused'
+    assert_equal "refuse|input:iec958-stereo would change the output $usb plays to from output:iec958-stereo to none" \
+        "$(plan_of "$usb" input:iec958-stereo "$CARDS_USB_AND_HDA")" \
+        'so is one that drops it'
+    assert_equal 'already' "$(plan_of "$hda" output:analog-stereo+input:analog-stereo "$CARDS_USB_AND_HDA")" \
+        'the second card is judged on its own active profile'
+
+    assert_equal 'output:analog-stereo+input:analog-stereo' \
+        "$(sendspin::card_profile_candidates "$hda" "$CARDS_HDA_UNPLUGGED")" \
+        'the profiles a refusal suggests are exactly the ones that would switch'
+    assert_equal 'output:iec958-stereo+input:analog-stereo' \
+        "$(sendspin::card_profile_candidates "$usb" "$CARDS_USB_AND_HDA")" \
+        'on the adapter too'
+}
+
 main() {
     printf 'pactl parse: checking %s\n' "$SCRIPT_DIR/../rootfs/usr/lib/sendspin-cli/common.sh"
 
@@ -841,6 +996,7 @@ main() {
     check_server_default_sink
     check_input_source
     check_app_input
+    check_card_profiles
     check_sink_state
     check_mute_and_level
     check_garbage_is_no_answer
