@@ -180,6 +180,153 @@ check_server_default_sink() {
 }
 
 # ==============================================================================
+# The Audio panel's input
+# ==============================================================================
+
+check_input_source() {
+    local out conf sources sinks own
+
+    step 'the input comes from client.conf, with the server default as the fallback'
+
+    conf='default-sink = alsa_output.usb-Topping_D10s-00.analog-stereo
+; default-source = something-else
+default-source = alsa_input.usb-Line_In-00.analog-stereo'
+    out=$(sendspin::pulse_conf_default_source <<< "$conf")
+    assert_equal 'alsa_input.usb-Line_In-00.analog-stereo' "$out" \
+        'default-source is read, and neither default-sink nor a commented-out one is'
+
+    out=$(sendspin::pulse_conf_default_source <<< 'default-sink = alsa_output.hdmi')
+    assert_equal '' "$out" 'no default-source reads as no answer'
+
+    out=$(sendspin::pulse_info_default_source <<< 'Default Sink: alsa_output.hdmi
+Default Source: alsa_output.hdmi.monitor')
+    assert_equal 'alsa_output.hdmi.monitor' "$out" "the daemon's default source is read from pactl info"
+
+    step 'which sources may be streamed'
+
+    # Real `pactl list short` output: tab-separated, the name second, monitors among them.
+    own=alsa_output.pci-0000_00_1f.3.analog-stereo
+    sources=$'0\talsa_output.pci-0000_00_1f.3.analog-stereo.monitor\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tIDLE
+1\talsa_input.usb-Line_In-00.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tSUSPENDED
+2\tbluez_sink.AA_BB.a2dp_sink.monitor\tmodule-bluez5-device.c\ts16le 2ch 44100Hz\tIDLE'
+    sinks=$'0\talsa_output.pci-0000_00_1f.3.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tIDLE
+1\tbluez_sink.AA_BB.a2dp_sink\tmodule-bluez5-device.c\ts16le 2ch 44100Hz\tIDLE'
+
+    out=$(sendspin::input_refusal alsa_input.usb-Line_In-00.analog-stereo "$sources" "$sinks" "$own")
+    assert_equal '' "$out" 'a real input that PulseAudio lists is accepted'
+
+    out=$(sendspin::input_refusal bluez_sink.AA_BB.a2dp_sink "$sources" "$sinks" "$own")
+    assert_equal '' "$out" 'another sink is accepted by its own name'
+
+    out=$(sendspin::input_refusal bluez_sink.AA_BB.a2dp_sink.monitor "$sources" "$sinks" "$own")
+    assert_equal '' "$out" "and by its monitor's: it is not what this player plays to"
+
+    out=$(sendspin::input_refusal "$own.monitor" "$sources" "$sinks" "$own")
+    assert_equal "$own.monitor is the output this player plays to, which would send Music Assistant its own audio" \
+        "$out" "this player's own monitor is refused even though it is listed"
+
+    out=$(sendspin::input_refusal "$own" "$sources" "$sinks" "$own")
+    assert_equal "$own is the output this player plays to, which would send Music Assistant its own audio" \
+        "$out" 'and so is its own sink by name, which captures the same thing'
+
+    out=$(sendspin::input_refusal alsa_input.usb-Gone-00.analog-stereo "$sources" "$sinks" "$own")
+    assert_equal 'alsa_input.usb-Gone-00.analog-stereo is not among the sources and sinks PulseAudio lists' \
+        "$out" 'a name that is not there is refused, by name'
+
+    # A name that only occurs as part of another must not pass for the whole one.
+    out=$(sendspin::input_refusal alsa_input.usb-Line_In-00 "$sources" "$sinks" "$own")
+    assert_equal 'alsa_input.usb-Line_In-00 is not among the sources and sinks PulseAudio lists' \
+        "$out" 'a partial name is not a match'
+
+    out=$(sendspin::input_refusal '' "$sources" "$sinks" "$own")
+    assert_equal 'no input is named' "$out" 'no name at all is refused'
+
+    # The fallback a sink that cannot be worked out reads as, with the check still meaningful.
+    out=$(sendspin::input_refusal '.monitor' "$sources" "$sinks" '')
+    assert_equal '.monitor is the output this player plays to, which would send Music Assistant its own audio' \
+        "$out" 'an unknown own sink matches nothing a real name could be'
+
+    out=$(sendspin::pulse_short_names <<< "$sources"$'\n'"$sinks")
+    assert_equal "$own.monitor, alsa_input.usb-Line_In-00.analog-stereo, bluez_sink.AA_BB.a2dp_sink.monitor, $own, bluez_sink.AA_BB.a2dp_sink" \
+        "$out" 'the names to choose from are listed on one line'
+}
+
+# The whole decision the run script makes before writing an input, from what PulseAudio and
+# client.conf say: which name a bare `pulse` resolves to, and which sink counts as this player's.
+check_app_input() {
+    local out sources sinks info conf hdmi analog line_in bt
+    hdmi=alsa_output.pci-0000_00_1f.3.hdmi-stereo
+    analog=alsa_output.pci-0000_00_1f.3.analog-stereo
+    line_in=alsa_input.usb-Line_In-00.analog-stereo
+    bt=bluez_sink.AA_BB.a2dp_sink
+
+    sources=$'0\t'"$hdmi"$'.monitor\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tIDLE
+1\t'"$analog"$'.monitor\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tIDLE
+2\t'"$line_in"$'\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tSUSPENDED
+3\t'"$bt"$'.monitor\tmodule-bluez5-device.c\ts16le 2ch 44100Hz\tIDLE'
+    sinks=$'0\t'"$hdmi"$'\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tIDLE
+1\t'"$analog"$'\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tIDLE
+2\t'"$bt"$'\tmodule-bluez5-device.c\ts16le 2ch 44100Hz\tIDLE'
+    # The daemon's defaults are HDMI and its monitor, which is what a machine with no input
+    # reports as its default source.
+    info=${PACTL_INFO}
+
+    step 'the Audio panel input, resolved'
+
+    conf="default-sink = $analog
+default-source = $line_in"
+    out=$(sendspin::app_input_refusal pulse "$sources" "$sinks" "$info" "$conf")
+    assert_equal '' "$out" "client.conf's default-source is captured, over the daemon's monitor"
+
+    out=$(sendspin::app_input_refusal pulse "$sources" "$sinks" \
+        "${info/Default Source: $hdmi.monitor/Default Source: $line_in}" "default-sink = $analog")
+    assert_equal '' "$out" "with none in client.conf, the daemon's default source is captured"
+
+    out=$(sendspin::app_input_refusal pulse "$sources" "$sinks" "$info" "default-sink = $analog")
+    assert_equal 'this machine has no audio input to use' "$out" \
+        "the daemon's fallback monitor is refused, though it is not this player's sink"
+
+    out=$(sendspin::app_input_refusal pulse "$sources" "$sinks" "$info" \
+        "default-sink = $analog
+default-source = $bt.monitor")
+    assert_equal 'this machine has no audio input to use' "$out" \
+        'so is a monitor in client.conf: the panel never offers one'
+
+    out=$(sendspin::app_input_refusal pulse "$sources" "$sinks" "$info" \
+        "default-sink = $analog
+default-source = alsa_input.usb-Gone-00.analog-stereo")
+    assert_equal 'alsa_input.usb-Gone-00.analog-stereo is not among the sources and sinks PulseAudio lists' \
+        "$out" 'a panel input that has gone is refused, by name'
+
+    out=$(sendspin::app_input_refusal pulse '' '' '' '')
+    assert_equal 'no input is named' "$out" 'nothing anywhere names an input'
+
+    step "a named input, against this player's own sink"
+
+    out=$(sendspin::app_input_refusal "pulse:$analog.monitor" "$sources" "$sinks" "$info" \
+        "default-sink = $analog")
+    assert_equal "$analog.monitor is the output this player plays to, which would send Music Assistant its own audio" \
+        "$out" "client.conf's default-sink is this player's own"
+
+    out=$(sendspin::app_input_refusal "pulse:$hdmi" "$sources" "$sinks" "$info" \
+        "default-sink = $analog")
+    assert_equal '' "$out" "and the daemon's default is then just another sink"
+
+    out=$(sendspin::app_input_refusal "pulse:$hdmi.monitor" "$sources" "$sinks" "$info" '')
+    assert_equal "$hdmi.monitor is the output this player plays to, which would send Music Assistant its own audio" \
+        "$out" "with no client.conf, the daemon's default sink is this player's own"
+
+    out=$(sendspin::app_input_refusal "pulse:$bt" "$sources" "$sinks" "$info" \
+        "default-sink = $analog
+default-source = $line_in")
+    assert_equal '' "$out" "a named input ignores the panel's default-source"
+
+    out=$(sendspin::app_input_refusal "pulse:$line_in" "$sources" "$sinks" "$info" \
+        "default-sink = $analog")
+    assert_equal '' "$out" 'a named source is captured by its own name'
+}
+
+# ==============================================================================
 # Reading a sink's state
 # ==============================================================================
 
@@ -692,6 +839,8 @@ main() {
 
     check_client_conf_default_sink
     check_server_default_sink
+    check_input_source
+    check_app_input
     check_sink_state
     check_mute_and_level
     check_garbage_is_no_answer

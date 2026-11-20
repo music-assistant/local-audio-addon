@@ -31,6 +31,11 @@ it is encrypted.
 - A change of audio format mid-stream no longer knocks the player out of sync.
 - The player no longer makes hard sync corrections while the system's time
   service is gently adjusting the clock.
+- A new **Audio input** setting streams a line-in or microphone to Music
+  Assistant, where it shows up under Live Inputs. Off by default. `audio_panel`
+  uses the input chosen in this app's Audio panel, `named_source` captures a
+  source or sink by name, such as another app's output or a Bluetooth device, and
+  `test_tone` checks the path without any hardware.
 - A container that was stopped and started again, rather than recreated,
   now advertises itself to Music Assistant again instead of going unseen
   (#49, thanks @rfavreau).

@@ -663,7 +663,8 @@ retire_player() {
 # the list that dies with it.
 start_player() {
     local name='' output='' log_level='' server='' apparmor='' stream='' data=''
-    local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' hook_start='' hook_stop=''
+    local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' input='' input_source=''
+    local hook_start='' hook_stop=''
     local local_pairing='' local_pairing_port='' local_pairing_address=''
     local keep_output_alive='' release_device='' alsa_mixer='' alsa_mixer_curve=''
     local host_bus=''
@@ -682,6 +683,8 @@ start_player() {
             audio_format) audio_format=$value ;;
             legacy_id) legacy_id=$value ;;
             allow_unpaired) allow_unpaired=$value ;;
+            input) input=$value ;;
+            input_source) input_source=$value ;;
             hook_start) hook_start=$value ;;
             hook_stop) hook_stop=$value ;;
             local_pairing) local_pairing=$value ;;
@@ -756,7 +759,8 @@ start_player() {
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
             "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
-            "allow_unpaired=$allow_unpaired" "hook_start=$hook_start" "hook_stop=$hook_stop" \
+            "allow_unpaired=$allow_unpaired" "input=$input" "input_source=$input_source" \
+            "hook_start=$hook_start" "hook_stop=$hook_stop" \
             "local_pairing=$local_pairing" "local_pairing_port=$local_pairing_port" \
             "keep_output_alive=$keep_output_alive" "release_device=$release_device" \
             "alsa_mixer=$alsa_mixer" "alsa_mixer_curve=$alsa_mixer_curve"
@@ -774,6 +778,7 @@ start_player() {
         if [ -n "$allow_unpaired" ]; then
             args+=(--env "SENDSPIN_ALLOW_UNPAIRED=$allow_unpaired")
         fi
+        if [ -n "$input" ]; then args+=(--env "SENDSPIN_INPUT=$input"); fi
         if [ -n "$hook_start" ]; then args+=(--env "SENDSPIN_HOOK_START=$hook_start"); fi
         if [ -n "$hook_stop" ]; then args+=(--env "SENDSPIN_HOOK_STOP=$hook_stop"); fi
         if [ -n "$local_pairing" ]; then args+=(--env "SENDSPIN_LOCAL_PAIRING=$local_pairing"); fi
@@ -1559,6 +1564,53 @@ check_allow_unpaired() {
         'the log names the value it refused, and why'
 }
 
+# The two deployments spell the input differently: the add-on's dropdown words, and upstream's
+# value under Compose. Every refusal waits on the connection-mode line, which is logged after the
+# config is written.
+check_input() {
+    local container tone=tone
+    [ "$MODE" = addon ] && tone=test_tone
+
+    step 'no input asked for'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL"
+    container=$PLAYER
+    assert_log "$container" 'over mDNS, waiting for a Music Assistant server to connect.' \
+        'the player was started, so its config has been rendered'
+    refute_config_line "$container" '^input' 'and no input is written'
+
+    step 'the test tone as an input'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "input=$tone"
+    container=$PLAYER
+    assert_log "$container" "Input device 'tone' captures" 'the player opens the tone'
+    assert_config_line "$container" '^input = tone$' \
+        "because $tone reached the config under the key the player reads"
+
+    [ "$MODE" = addon ] || return 0
+
+    step 'the input turned off'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'input=off'
+    container=$PLAYER
+    assert_log "$container" 'over mDNS, waiting for a Music Assistant server to connect.' \
+        'the player was started, so its config has been rendered'
+    refute_config_line "$container" '^input' 'and off writes no input, not an input called off'
+
+    # No PulseAudio is mapped in here, which is the same answer as one with no input to offer.
+    step 'the Audio panel input with nothing to capture'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'input=audio_panel'
+    container=$PLAYER
+    assert_log "$container" 'this player is not offering an input.' \
+        'the log says no input is on offer'
+    assert_log "$container" 'listening on port 8928' 'and the player runs without one'
+    refute_config_line "$container" '^input' 'with no input written'
+
+    step 'a named input with nothing to capture'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'input=named_source'         'input_source=bluez_sink.gone'
+    container=$PLAYER
+    assert_log "$container" 'this player is not offering an input.'         'the log says no input is on offer'
+    assert_log "$container" 'listening on port 8928' 'and the player runs without one'
+    refute_config_line "$container" '^input' 'with no input written'
+}
+
 # ==============================================================================
 # Local pairing
 # ==============================================================================
@@ -2078,6 +2130,7 @@ main() {
     check_buffer_ms
     check_compose_only_options
     check_allow_unpaired
+    check_input
     check_local_pairing
     check_crash_visibility
     check_stream_hooks
