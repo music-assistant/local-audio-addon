@@ -126,8 +126,10 @@ is.
 Many sound cards offer no input at all until something is plugged into the
 line-in or mic socket, because the card starts on a profile that has outputs
 only. **Input card profile** switches a card to a profile that has an input as
-well, when this app starts, so the input is there to pick in the Audio panel or
-to name in **Input source name**. Unplugging afterwards leaves it in place.
+well, when this app starts. With `named_source`, the input is captured on that
+same start. With `audio_panel`, it only appears in the Audio panel once this app
+has switched the card, so pick it there and restart the app. Unplugging
+afterwards leaves it in place.
 
 Set it to the card's name and the profile's, separated by a colon:
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Unit checks for the silent-output check in rootfs/usr/lib/sendspin-cli/common.sh.
+# Unit checks for the pactl parsing in rootfs/usr/lib/sendspin-cli/common.sh: the silent-output
+# check, the input check and the input card profile.
 #
 # `pactl`'s output format is not this repo's to keep stable, and a format that moved would turn
 # the warnings off with no symptom anywhere -- on an image that still builds and still boots. So

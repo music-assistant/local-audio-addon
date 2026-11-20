@@ -33,7 +33,8 @@ configuration:
       unless the input you want is missing while nothing is plugged into it. Set
       it to card:profile, such as
       alsa_card.pci-0000_00_1f.3:output:analog-stereo+input:analog-stereo, to
-      switch that card to a profile with an input when this app starts. This
+      switch that card to a profile with an input when this app starts; with
+      audio_panel, pick the new input in the Audio panel and restart. This
       changes the card for every app and add-on on this machine; the Audio panel
       can switch it back. A profile that would change the card's output, or that
       is not available, is refused, and the log lists the ones that would work.
