@@ -26,7 +26,7 @@ Music Assistant discovers the player over mDNS and connects back in on port
 8928, which is why the container needs `network_mode: host`. Once the log reads
 
 ```
-I cli: sendspin-cli 1.0.0 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
+I cli: sendspin-cli 1.0.1 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
 I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspin)
 ```
 
@@ -184,8 +184,8 @@ There are three ways in:
   on `SENDSPIN_LOCAL_PAIRING_ADDRESS` and `SENDSPIN_LOCAL_PAIRING_PORT`, and
   advertises the port to every server that connects, so a Music Assistant that
   can reach that address fetches the token and pairs by itself. It answers only
-  peers on that address's own subnet, and stops serving, and advertising, once
-  a server has paired. It renders as
+  peers on that address's own subnet or on this host, and stops serving, and
+  advertising, once a server has paired. It renders as
   `pairing-token-endpoint = <address>:<port>`. Anything that can reach the
   address can pair with this player, so it must be one only Music Assistant's
   host can reach; there is no default here for that reason, and `true` with no
