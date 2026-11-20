@@ -663,6 +663,8 @@ retire_player() {
 start_player() {
     local name='' output='' log_level='' server='' apparmor='' stream='' data=''
     local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' hook_start='' hook_stop=''
+    local local_pairing='' local_pairing_port='' local_pairing_address=''
+    local keep_output_alive='' release_device='' alsa_mixer='' alsa_mixer_curve=''
     local pair key value
     local -a args
 
@@ -680,6 +682,13 @@ start_player() {
             allow_unpaired) allow_unpaired=$value ;;
             hook_start) hook_start=$value ;;
             hook_stop) hook_stop=$value ;;
+            local_pairing) local_pairing=$value ;;
+            local_pairing_port) local_pairing_port=$value ;;
+            local_pairing_address) local_pairing_address=$value ;;
+            keep_output_alive) keep_output_alive=$value ;;
+            release_device) release_device=$value ;;
+            alsa_mixer) alsa_mixer=$value ;;
+            alsa_mixer_curve) alsa_mixer_curve=$value ;;
             stream) stream=$value ;;
             apparmor) apparmor=$value ;;
             data) data=$value ;;
@@ -721,13 +730,22 @@ start_player() {
         args+=(--volume "$data:/data")
     fi
 
+    # Not an option in either mode, so delivered the same way in both: the add-on's default is the
+    # hassio bridge, which no container here has.
+    if [ -n "$local_pairing_address" ]; then
+        args+=(--env "SENDSPIN_LOCAL_PAIRING_ADDRESS=$local_pairing_address")
+    fi
+
     # `audio_format` is served here too, though it is not an add-on option: a check can then
     # assert that the add-on does not take it even when a Supervisor offers it, which is a
     # stronger statement about the split than never offering it would be.
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
             "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
-            "allow_unpaired=$allow_unpaired" "hook_start=$hook_start" "hook_stop=$hook_stop"
+            "allow_unpaired=$allow_unpaired" "hook_start=$hook_start" "hook_stop=$hook_stop" \
+            "local_pairing=$local_pairing" "local_pairing_port=$local_pairing_port" \
+            "keep_output_alive=$keep_output_alive" "release_device=$release_device" \
+            "alsa_mixer=$alsa_mixer" "alsa_mixer_curve=$alsa_mixer_curve"
         args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
         args+=(--env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
         args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
@@ -744,6 +762,18 @@ start_player() {
         fi
         if [ -n "$hook_start" ]; then args+=(--env "SENDSPIN_HOOK_START=$hook_start"); fi
         if [ -n "$hook_stop" ]; then args+=(--env "SENDSPIN_HOOK_STOP=$hook_stop"); fi
+        if [ -n "$local_pairing" ]; then args+=(--env "SENDSPIN_LOCAL_PAIRING=$local_pairing"); fi
+        if [ -n "$local_pairing_port" ]; then
+            args+=(--env "SENDSPIN_LOCAL_PAIRING_PORT=$local_pairing_port")
+        fi
+        if [ -n "$keep_output_alive" ]; then
+            args+=(--env "SENDSPIN_KEEP_OUTPUT_ALIVE=$keep_output_alive")
+        fi
+        if [ -n "$release_device" ]; then args+=(--env "SENDSPIN_RELEASE_DEVICE=$release_device"); fi
+        if [ -n "$alsa_mixer" ]; then args+=(--env "SENDSPIN_ALSA_MIXER=$alsa_mixer"); fi
+        if [ -n "$alsa_mixer_curve" ]; then
+            args+=(--env "SENDSPIN_ALSA_MIXER_CURVE=$alsa_mixer_curve")
+        fi
     fi
 
     CONTAINERS+=("$PLAYER")
@@ -939,7 +969,7 @@ unload_apparmor_profile() {
 # bundled dbus, avahi-daemon, and the avahi-compat shim the player registers through -- so it is
 # asserted end to end as well as by its parts.
 check_advertise_mode() {
-    local container mode status_out devices_out token
+    local container mode status_out devices_out tui_out token
     step 'advertise mode'
     start_player "name=$PLAYER_NAME" 'output=null' "log_level=$PLAYER_LOG_LEVEL"
     container=$PLAYER
@@ -1056,6 +1086,15 @@ check_advertise_mode() {
         fail 'the shipped player does not offer all five backends this image builds'
     fi
     pass 'the shipped player offers null, stdout, alsa, pulse and pipewire'
+
+    # Built with SENDSPIN_CLI_WITH_TUI=OFF, and the configure log has no line to grep for it.
+    tui_out="$WORK_DIR/${container}.tui"
+    if docker exec "$container" sendspin-cli tui >"$tui_out" 2>&1 ||
+        ! grep -F -e 'this build has no TUI' "$tui_out" >/dev/null; then
+        cat "$tui_out" >&2
+        fail 'the shipped player has a tui subcommand, which this headless image does not build'
+    fi
+    pass 'the shipped player was built without the TUI'
 
     # And the runtime half, which the list above genuinely cannot answer for: every backend
     # library is linked rather than dlopened, so a runtime stage missing one gives a binary that
@@ -1215,8 +1254,14 @@ check_credentials_are_kept_out_of_the_mode_line() {
 # refuses the newline, and says nothing about what the command itself may do.
 check_newline_in_an_option() {
     local container case option variable
+    local -a cases=('name|SENDSPIN_NAME' 'hook_start|SENDSPIN_HOOK_START')
 
-    for case in 'name|SENDSPIN_NAME' 'hook_start|SENDSPIN_HOOK_START'; do
+    # Compose-only, so the add-on would ignore it rather than refuse it.
+    if [ "$MODE" = standalone ]; then
+        cases+=('alsa_mixer|SENDSPIN_ALSA_MIXER')
+    fi
+
+    for case in "${cases[@]}"; do
         option=${case%%|*}
         variable=${case#*|}
 
@@ -1289,7 +1334,7 @@ check_buffer_ms() {
 # never offering it would. The format is one a device-less sink advertises, so what is under test
 # is the plumbing rather than a player refusing a shape it could not honour.
 check_compose_only_options() {
-    local container
+    local container case option message value
 
     step 'the Compose-only options'
     start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'audio_format=flac:48000:24:2'
@@ -1303,6 +1348,70 @@ check_compose_only_options() {
         assert_config_line "$container" '^audio-format = flac:48000:24:2$' \
             'the audio format reached the rendered config under the key the player reads'
     fi
+    refute_config_line "$container" '^(keep-output-alive|release-device|alsa-mixer)' \
+        'no ALSA output option is rendered when none was set'
+
+    # `alsa:null` because upstream refuses a mixer on any output that is not ALSA. There is no
+    # card 0 here, so the player parses the whole config and then refuses to open the mixer:
+    # that refusal, rather than a parse error, is what shows each key landed where it reads it.
+    step 'the Compose-only ALSA output options'
+    start_player 'output=alsa:null' "log_level=$PLAYER_LOG_LEVEL" 'keep_output_alive=10' \
+        'release_device=true' 'alsa_mixer=0:Master' 'alsa_mixer_curve=cubic'
+    container=$PLAYER
+
+    if [ "$MODE" = addon ]; then
+        assert_log "$container" 'listening on port 8928' 'the player came up on its port'
+        refute_config_line "$container" '^(keep-output-alive|release-device|alsa-mixer)' \
+            'the ALSA output options are not add-on options, even with a Supervisor serving them'
+    else
+        wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+            show_logs "$container"
+            fail 'a mixer on a card that does not exist left the container running'
+        }
+        assert_log "$container" "cannot open ALSA mixer '0:Master'" \
+            'the player read the mixer and refused it, so the config around it parsed'
+        assert_config_line "$container" '^keep-output-alive = 10$' \
+            'the keep-alive reached the rendered config under the key the player reads'
+        assert_config_line "$container" '^release-device = true$' \
+            'release-device reached the rendered config under the key the player reads'
+        assert_config_line "$container" '^alsa-mixer = 0:Master$' \
+            'the mixer reached the rendered config under the key the player reads'
+        assert_config_line "$container" '^alsa-mixer-curve = cubic$' \
+            'the mixer curve reached the rendered config under the key the player reads'
+    fi
+
+    # Our own refusals, so standalone only: the add-on never reads these. Each value is one the
+    # player would refuse as well, which is why only the wording proves the early check ran.
+    [ "$MODE" = standalone ] || return 0
+
+    for case in \
+        'keep_output_alive=abc|SENDSPIN_KEEP_OUTPUT_ALIVE is "abc", which is not a whole number of seconds.' \
+        'keep_output_alive=3601|SENDSPIN_KEEP_OUTPUT_ALIVE is 3601, outside the 0 to 3600 seconds the player accepts.' \
+        'release_device=yes|SENDSPIN_RELEASE_DEVICE is "yes", which is neither true nor false.' \
+        'alsa_mixer_curve=linear|SENDSPIN_ALSA_MIXER_CURVE is "linear", which is neither spec nor cubic.'; do
+        option=${case%%|*}
+        message=${case#*|}
+
+        step "the ALSA output option ${option}"
+        start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "$option"
+        container=$PLAYER
+
+        wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+            show_logs "$container"
+            fail "${option} left the container running"
+        }
+        assert_exit_code "$container" 1 "the container exits 1 on ${option}"
+        assert_log "$container" "$message" 'the log names the value it refused, and why'
+    done
+
+    for value in 0 3600; do
+        step "a keep-alive of ${value} seconds"
+        start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "keep_output_alive=${value}"
+        container=$PLAYER
+        assert_log "$container" 'listening on port 8928' 'the player came up on its port'
+        assert_config_line "$container" "^keep-output-alive = ${value}\$" \
+            'the boundary reached the rendered config unchanged'
+    done
 }
 
 # SENDSPIN_ID chose the client id up to 0.3, and upstream now refuses `id =` outright, since the
@@ -1361,6 +1470,134 @@ check_allow_unpaired() {
     assert_log "$container" 'SENDSPIN_ALLOW_UNPAIRED is "yes", which is neither true nor false.' \
         'the log names the value it refused, and why'
 }
+
+# ==============================================================================
+# Local pairing
+# ==============================================================================
+
+# `GET /` on address:port from inside the container, printing whatever came back, and failing
+# only if nothing accepted the connection. bash's /dev/tcp because the image ships no
+# HTTP client, and from inside because the address under test may be the container's loopback.
+fetch_pairing_token() {
+    local container=$1 address=$2 port=$3
+    # shellcheck disable=SC2016 # expanded by the bash inside the container
+    docker exec "$container" timeout 10 bash -c '
+        exec 3<>"/dev/tcp/$1/$2" 2>/dev/null || exit 7
+        printf "GET / HTTP/1.1\r\nHost: %s:%s\r\nConnection: close\r\n\r\n" "$1" "$2" >&3
+        timeout 5 cat <&3 || true
+    ' _ "$address" "$port"
+}
+
+# A token served after a pairing would let whoever fetched it pair a second server.
+wait_for_endpoint_to_close() {
+    local container=$1 address=$2 port=$3
+    local waited=0
+    while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
+        if ! fetch_pairing_token "$container" "$address" "$port" >/dev/null; then
+            pass 'and the endpoint closed once it had'
+            return 0
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    show_logs "$container"
+    fail "the endpoint on $address:$port still answers after a server paired"
+}
+
+# The container's own address on its Docker network: an interface the endpoint must stay off.
+container_address_of() {
+    docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"
+}
+
+# On Home Assistant OS the endpoint binds the hassio bridge, 172.30.32.1. No container here has
+# that address, so the "on" case names loopback instead: an address the stand-in cannot reach and
+# the container's own network address can then stand for every interface it must stay off.
+check_local_pairing() {
+    local container token reply other
+
+    step 'local pairing left at its default'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL"
+    container=$PLAYER
+    # Logged once the config is written, which the reads below need.
+    assert_log "$container" 'Advertising "' 'the player was started'
+    if [ "$MODE" = addon ]; then
+        assert_log "$container" 'Local pairing is off: 172.30.32.1 is not an address of this host' \
+            'the add-on looks for the hassio bridge by default, and says so when it is not there'
+    else
+        refute_log "$container" 'Local pairing' 'a plain container leaves local pairing off quietly'
+    fi
+    refute_config_line "$container" '^pairing-token-endpoint' \
+        'and no endpoint reached the rendered config'
+    assert_log "$container" 'No server is paired yet. Pairing token' \
+        'so the token is logged at startup for pairing by hand, as before'
+
+    # No stand-in server here: the endpoint closes once one pairs, and the step after this covers
+    # that.
+    step 'local pairing on'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'local_pairing=true' \
+        'local_pairing_address=127.0.0.1' 'local_pairing_port=8931'
+    container=$PLAYER
+    # Logged by the player, so the config it read is already written.
+    assert_log "$container" 'Serving the pairing token on http://127.0.0.1:8931/ until a server pairs' \
+        'the player serves the token there'
+    assert_config_line "$container" '^pairing-token-endpoint = 127\.0\.0\.1:8931$' \
+        'because the endpoint reached the rendered config, on the address and port asked for'
+
+    token=$(pairing_token_of "$container")
+    reply=$(fetch_pairing_token "$container" 127.0.0.1 8931) ||
+        fail 'nothing accepted a connection on 127.0.0.1:8931'
+    if [[ $reply != 'HTTP/1.1 200'* ]] || [[ $reply != *"$token"* ]]; then
+        fail "the endpoint did not answer with this player's pairing token"
+    fi
+    pass 'it answers with the pairing token'
+
+    other=$(container_address_of "$container")
+    [ -n "$other" ] || fail "could not read the container's network address"
+    if fetch_pairing_token "$container" "$other" 8931 >/dev/null; then
+        fail "the endpoint also answers on $other, an address it was not given"
+    fi
+    pass "and nothing listens on the container's other interface, $other"
+
+    if grep -F -e "$token" "$(logs_of "$container")" >/dev/null; then
+        fail 'the pairing token is in the container log while local pairing is on'
+    fi
+    pass 'the token is not logged: the startup line points at pair-token instead'
+
+    step 'local pairing on, until a server pairs'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' 'local_pairing=true' \
+        'local_pairing_address=127.0.0.1' 'local_pairing_port=8931'
+    container=$PLAYER
+    assert_server_reached 'local-pairing 8931' \
+        'the hello lists the local pairing role and advertises the port'
+    assert_server_reached 'paired' 'the stand-in server paired with the player'
+    wait_for_endpoint_to_close "$container" 127.0.0.1 8931
+
+    step 'local pairing turned off'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'stream=yes' 'local_pairing=false' \
+        'local_pairing_address=127.0.0.1'
+    container=$PLAYER
+    assert_server_reached 'local-pairing none' 'the hello carries no local pairing role'
+    refute_config_line "$container" '^pairing-token-endpoint' \
+        'and no endpoint reached the rendered config'
+    if fetch_pairing_token "$container" 127.0.0.1 8929 >/dev/null; then
+        fail 'something answers on 127.0.0.1:8929 with local pairing off'
+    fi
+    pass 'and nothing listens on the default port'
+
+    [ "$MODE" = standalone ] || return 0
+
+    step 'local pairing on with no address'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'local_pairing=true'
+    container=$PLAYER
+    wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+        show_logs "$container"
+        fail 'SENDSPIN_LOCAL_PAIRING=true with no address left the container running'
+    }
+    assert_exit_code "$container" 1 'the container exits 1 rather than guess an address'
+    assert_log "$container" 'SENDSPIN_LOCAL_PAIRING is true but SENDSPIN_LOCAL_PAIRING_ADDRESS is empty' \
+        'the log says what is missing'
+}
+
 
 # An output the host cannot open is the likeliest way for this image to be misconfigured, and the
 # one failure a user cannot see: the Supervisor calls a running container a healthy add-on
@@ -1751,6 +1988,7 @@ main() {
     check_buffer_ms
     check_compose_only_options
     check_allow_unpaired
+    check_local_pairing
     check_crash_visibility
     check_stream_hooks
     check_confined_stop

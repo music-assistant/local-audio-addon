@@ -26,14 +26,14 @@ Music Assistant discovers the player over mDNS and connects back in on port
 8928, which is why the container needs `network_mode: host`. Once the log reads
 
 ```
-I cli: sendspin-cli 0.4.0 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
+I cli: sendspin-cli 1.0.0 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
 I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspin)
 ```
 
 the player is waiting to be picked up in Music Assistant's Sendspin provider,
 which then has to pair with it before it can play — see [Pairing](#pairing).
 
-This image's own configuration is nine environment variables, all optional:
+This image's own configuration is sixteen environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -45,7 +45,14 @@ This image's own configuration is nine environment variables, all optional:
 | `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
 | `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
 | `SENDSPIN_ALLOW_UNPAIRED` | `false` | `true` lets any server play without pairing |
+| `SENDSPIN_LOCAL_PAIRING` | `false` | `true` serves the pairing token on one address, see [Pairing](#pairing) |
+| `SENDSPIN_LOCAL_PAIRING_ADDRESS` | unset | The one address the token is served on; required when the above is `true` |
+| `SENDSPIN_LOCAL_PAIRING_PORT` | `8929` | The port it is served on, `1024`–`65535` |
 | `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:<channels>`, Compose only |
+| `SENDSPIN_KEEP_OUTPUT_ALIVE` | unset (off) | Seconds, `0`–`3600`, to keep an ALSA output playing silence after a stream, Compose only |
+| `SENDSPIN_RELEASE_DEVICE` | `false` | `true` closes an ALSA device between streams, Compose only |
+| `SENDSPIN_ALSA_MIXER` | unset | An ALSA hardware mixer, `<card>:<control>`, to drive for volume, Compose only |
+| `SENDSPIN_ALSA_MIXER_CURVE` | unset (`spec`) | `spec` or `cubic`, how volume maps onto that mixer, Compose only |
 
 `SENDSPIN_BUFFER_MS` is how much audio the backend keeps queued up. Raise it
 where the sound breaks up on a busy or slow machine, at the cost of a longer
@@ -92,8 +99,8 @@ track down. The Home Assistant app offers the same two as
 had to be widened to let the player exec anything at all before they would work;
 the section on the app below covers what that grants.
 
-The last variable in the table is deliberately Compose-only, and the Home
-Assistant app has no field for it.
+The last five variables in the table are deliberately Compose-only, and the
+Home Assistant app has no field for them.
 
 `SENDSPIN_AUDIO_FORMAT` is for the DAC that will only play one shape properly.
 It moves that format to the front of the list this player advertises, so a
@@ -104,6 +111,24 @@ advertise is a refusal to start rather than a fallback, and under the shipped
 the same refusal. So check the device with `sendspin-cli -l` before pinning
 one. The app has no such DAC to hold: it plays through Home Assistant's
 PulseAudio, which converts.
+
+The other four act on an ALSA output and nothing else, and the app always plays
+through PulseAudio:
+
+- `SENDSPIN_KEEP_OUTPUT_ALIVE` is for an HDMI or S/PDIF receiver that needs
+  seconds to re-lock, and swallows the start of each stream while it does. The
+  output plays silence for that long after a stream ends, then stops, so the
+  receiver can still go to standby. `SENDSPIN_RELEASE_DEVICE` turns it off.
+- `SENDSPIN_RELEASE_DEVICE=true` closes the device at each stream end and
+  reopens it at the next, for a `hw:` DAC shared with another player on the
+  host. Another app can take it in between; the player then goes without
+  audio until the device is free, retrying in the background, and picks up
+  within the same stream once it is.
+- `SENDSPIN_ALSA_MIXER` drives a hardware mixer, such as `0:Master`, for volume
+  and mute instead of scaling the audio in software. `SENDSPIN_ALSA_MIXER_CURVE`
+  picks how the volume maps onto it: `spec` by default, or `cubic` to track
+  alsamixer's slider. The player refuses to start with a mixer it cannot open,
+  or with an output that is not ALSA.
 
 `SENDSPIN_ID` is gone. Up to 0.3 it chose the identity a server files volume,
 group membership and pairing under; that identity is now the public half of a
@@ -151,6 +176,18 @@ There are three ways in:
 - **`SENDSPIN_ALLOW_UNPAIRED=true`** skips pairing entirely, and lets any server
   on the network play. It renders as `allow-unpaired = true`, and anything but
   `true` or `false` stops the container with a line naming the value.
+- **Local pairing.** `SENDSPIN_LOCAL_PAIRING=true` serves the token over HTTP
+  on `SENDSPIN_LOCAL_PAIRING_ADDRESS` and `SENDSPIN_LOCAL_PAIRING_PORT`, and
+  advertises the port to every server that connects, so a Music Assistant that
+  can reach that address fetches the token and pairs by itself. It answers only
+  peers on that address's own subnet, and stops serving, and advertising, once
+  a server has paired. It renders as
+  `pairing-token-endpoint = <address>:<port>`. Anything that can reach the
+  address can pair with this player, so it must be one only Music Assistant's
+  host can reach; there is no default here for that reason, and `true` with no
+  address stops the container. While it is on, the token is not logged at
+  startup. The Home Assistant app turns this on by itself, on Home Assistant
+  OS's internal network.
 
 **Treat the token like a password.** It does not change for as long as `/data`
 is kept, and anyone who has it can pair a server with this player. It stops
@@ -304,8 +341,14 @@ passing the matching digest, which is what CI does per architecture. A plain
 
 `local_audio/` is the app manifest, wrapping this same image, so the runtime
 behaviour described above is shared. It reads its `name`, `log_level`, `server`,
-`buffer_ms`, `allow_unpaired`, `hook_start` and `hook_stop` from the app options
-instead of the environment.
+`buffer_ms`, `allow_unpaired`, `local_pairing`, `local_pairing_port`,
+`hook_start` and `hook_stop` from the app options instead of the environment.
+
+`local_pairing` is on by default there, and binds the endpoint to `172.30.32.1`,
+the host's side of Home Assistant OS's `hassio` network: Music Assistant runs on
+the same host, and nothing on the LAN can reach that address. A host without
+that address leaves it off and says so in the log, and the token is then logged
+at startup as before.
 
 The two hooks are the one option here that is code rather than a value, and they
 are the reason this app's AppArmor profile grants the player an exec at all. The

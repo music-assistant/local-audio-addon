@@ -11,6 +11,9 @@ sendspin::warn_if_id_is_set
 
 decision=$(sendspin::daemon_decision)
 
+# Assigned rather than tested in place, so a failure inside stops the script.
+pairing_endpoint=$(sendspin::local_pairing_endpoint)
+
 if [ "${decision}" = 'yes' ]; then
     sendspin::wait_for_socket "${AVAHI_SOCKET}"
 fi
@@ -45,6 +48,18 @@ install -m 600 /dev/null "${SENDSPIN_CONF}"
     if [ "${SENDSPIN_ALLOW_UNPAIRED}" = true ]; then
         printf 'allow-unpaired = true\n'
     fi
+    if [ -n "${SENDSPIN_KEEP_OUTPUT_ALIVE}" ]; then
+        printf 'keep-output-alive = %s\n' "$((10#${SENDSPIN_KEEP_OUTPUT_ALIVE}))"
+    fi
+    if [ "${SENDSPIN_RELEASE_DEVICE}" = true ]; then
+        printf 'release-device = true\n'
+    fi
+    if [ -n "${SENDSPIN_ALSA_MIXER}" ]; then
+        printf 'alsa-mixer = %s\n' "${SENDSPIN_ALSA_MIXER}"
+    fi
+    if [ -n "${SENDSPIN_ALSA_MIXER_CURVE}" ]; then
+        printf 'alsa-mixer-curve = %s\n' "${SENDSPIN_ALSA_MIXER_CURVE}"
+    fi
     if [ -n "${SENDSPIN_HOOK_START}" ]; then
         printf 'hook-start = %s\n' "${SENDSPIN_HOOK_START}"
     fi
@@ -53,6 +68,9 @@ install -m 600 /dev/null "${SENDSPIN_CONF}"
     fi
     if [ -n "${SENDSPIN_SERVER}" ]; then
         printf 'server = %s\n' "${SENDSPIN_SERVER}"
+    fi
+    if [ -n "${pairing_endpoint}" ]; then
+        printf 'pairing-token-endpoint = %s\n' "${pairing_endpoint}"
     fi
 } > "${SENDSPIN_CONF}"
 
