@@ -1,10 +1,9 @@
 # The player lives upstream and is built here from a pinned ref; this repo never
 # forks it. Bump both ARGs together: the SHA is checked against the clone, so a
 # repointed tag fails the build instead of quietly shipping different code.
-# Temporarily the branch of Sendspin/sendspin-cpp-cli#110, for the local pairing
-# endpoint. Re-pin to the release that carries it before this merges.
-ARG SENDSPIN_CLI_REF=chrisuthe/task/serve-the-pairing-token-on-an-internal-endpoint
-ARG SENDSPIN_CLI_SHA=8ab1260a5586a1e9f7c09280e2941811f5513f19
+# The SHA is the commit the tag points at, not the annotated tag object.
+ARG SENDSPIN_CLI_REF=v1.0.0
+ARG SENDSPIN_CLI_SHA=090e1bb6bf30d77266e7b7f65c3150a46de358db
 
 # ghcr.io/home-assistant/amd64-base-debian:trixie, which ships s6-overlay v3 and
 # bashio. CI overrides this with the digest for the architecture it is building;
@@ -62,12 +61,17 @@ RUN git clone --depth 1 --branch "${SENDSPIN_CLI_REF}" \
 # the configure step, it drops the backend and carries on. The greps are what
 # turns that into a failed build. They are the only guard in this stage;
 # scripts/smoke_test.sh asserts the same five off the binary that shipped.
+#
+# The TUI is upstream's FTXUI `tui` subcommand, for a person at a terminal; this
+# image is headless. Its configure prints no status line to grep, so the smoke
+# test asserts its absence off the binary instead.
 RUN cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DSENDSPIN_CLI_WITH_MDNS=ON \
         -DSENDSPIN_CLI_WITH_PORTAUDIO=OFF \
         -DSENDSPIN_CLI_WITH_PULSE=ON \
         -DSENDSPIN_CLI_WITH_PIPEWIRE=ON \
+        -DSENDSPIN_CLI_WITH_TUI=OFF \
         -DSENDSPIN_CLI_BUILD_TESTS=OFF \
         | tee configure.log \
     && grep -qE '^-- sendspin-cli audio backends: null, stdout, alsa, pulse, pipewire$' configure.log \

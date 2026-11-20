@@ -664,6 +664,7 @@ start_player() {
     local name='' output='' log_level='' server='' apparmor='' stream='' data=''
     local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' hook_start='' hook_stop=''
     local local_pairing='' local_pairing_port='' local_pairing_address=''
+    local keep_output_alive='' release_device='' alsa_mixer='' alsa_mixer_curve=''
     local pair key value
     local -a args
 
@@ -684,6 +685,10 @@ start_player() {
             local_pairing) local_pairing=$value ;;
             local_pairing_port) local_pairing_port=$value ;;
             local_pairing_address) local_pairing_address=$value ;;
+            keep_output_alive) keep_output_alive=$value ;;
+            release_device) release_device=$value ;;
+            alsa_mixer) alsa_mixer=$value ;;
+            alsa_mixer_curve) alsa_mixer_curve=$value ;;
             stream) stream=$value ;;
             apparmor) apparmor=$value ;;
             data) data=$value ;;
@@ -738,7 +743,9 @@ start_player() {
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
             "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
             "allow_unpaired=$allow_unpaired" "hook_start=$hook_start" "hook_stop=$hook_stop" \
-            "local_pairing=$local_pairing" "local_pairing_port=$local_pairing_port"
+            "local_pairing=$local_pairing" "local_pairing_port=$local_pairing_port" \
+            "keep_output_alive=$keep_output_alive" "release_device=$release_device" \
+            "alsa_mixer=$alsa_mixer" "alsa_mixer_curve=$alsa_mixer_curve"
         args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
         args+=(--env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
         args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
@@ -758,6 +765,14 @@ start_player() {
         if [ -n "$local_pairing" ]; then args+=(--env "SENDSPIN_LOCAL_PAIRING=$local_pairing"); fi
         if [ -n "$local_pairing_port" ]; then
             args+=(--env "SENDSPIN_LOCAL_PAIRING_PORT=$local_pairing_port")
+        fi
+        if [ -n "$keep_output_alive" ]; then
+            args+=(--env "SENDSPIN_KEEP_OUTPUT_ALIVE=$keep_output_alive")
+        fi
+        if [ -n "$release_device" ]; then args+=(--env "SENDSPIN_RELEASE_DEVICE=$release_device"); fi
+        if [ -n "$alsa_mixer" ]; then args+=(--env "SENDSPIN_ALSA_MIXER=$alsa_mixer"); fi
+        if [ -n "$alsa_mixer_curve" ]; then
+            args+=(--env "SENDSPIN_ALSA_MIXER_CURVE=$alsa_mixer_curve")
         fi
     fi
 
@@ -954,7 +969,7 @@ unload_apparmor_profile() {
 # bundled dbus, avahi-daemon, and the avahi-compat shim the player registers through -- so it is
 # asserted end to end as well as by its parts.
 check_advertise_mode() {
-    local container mode status_out devices_out token
+    local container mode status_out devices_out tui_out token
     step 'advertise mode'
     start_player "name=$PLAYER_NAME" 'output=null' "log_level=$PLAYER_LOG_LEVEL"
     container=$PLAYER
@@ -1071,6 +1086,15 @@ check_advertise_mode() {
         fail 'the shipped player does not offer all five backends this image builds'
     fi
     pass 'the shipped player offers null, stdout, alsa, pulse and pipewire'
+
+    # Built with SENDSPIN_CLI_WITH_TUI=OFF, and the configure log has no line to grep for it.
+    tui_out="$WORK_DIR/${container}.tui"
+    if docker exec "$container" sendspin-cli tui >"$tui_out" 2>&1 ||
+        ! grep -F -e 'this build has no TUI' "$tui_out" >/dev/null; then
+        cat "$tui_out" >&2
+        fail 'the shipped player has a tui subcommand, which this headless image does not build'
+    fi
+    pass 'the shipped player was built without the TUI'
 
     # And the runtime half, which the list above genuinely cannot answer for: every backend
     # library is linked rather than dlopened, so a runtime stage missing one gives a binary that
@@ -1230,8 +1254,14 @@ check_credentials_are_kept_out_of_the_mode_line() {
 # refuses the newline, and says nothing about what the command itself may do.
 check_newline_in_an_option() {
     local container case option variable
+    local -a cases=('name|SENDSPIN_NAME' 'hook_start|SENDSPIN_HOOK_START')
 
-    for case in 'name|SENDSPIN_NAME' 'hook_start|SENDSPIN_HOOK_START'; do
+    # Compose-only, so the add-on would ignore it rather than refuse it.
+    if [ "$MODE" = standalone ]; then
+        cases+=('alsa_mixer|SENDSPIN_ALSA_MIXER')
+    fi
+
+    for case in "${cases[@]}"; do
         option=${case%%|*}
         variable=${case#*|}
 
@@ -1304,7 +1334,7 @@ check_buffer_ms() {
 # never offering it would. The format is one a device-less sink advertises, so what is under test
 # is the plumbing rather than a player refusing a shape it could not honour.
 check_compose_only_options() {
-    local container
+    local container case option message value
 
     step 'the Compose-only options'
     start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'audio_format=flac:48000:24:2'
@@ -1318,6 +1348,70 @@ check_compose_only_options() {
         assert_config_line "$container" '^audio-format = flac:48000:24:2$' \
             'the audio format reached the rendered config under the key the player reads'
     fi
+    refute_config_line "$container" '^(keep-output-alive|release-device|alsa-mixer)' \
+        'no ALSA output option is rendered when none was set'
+
+    # `alsa:null` because upstream refuses a mixer on any output that is not ALSA. There is no
+    # card 0 here, so the player parses the whole config and then refuses to open the mixer:
+    # that refusal, rather than a parse error, is what shows each key landed where it reads it.
+    step 'the Compose-only ALSA output options'
+    start_player 'output=alsa:null' "log_level=$PLAYER_LOG_LEVEL" 'keep_output_alive=10' \
+        'release_device=true' 'alsa_mixer=0:Master' 'alsa_mixer_curve=cubic'
+    container=$PLAYER
+
+    if [ "$MODE" = addon ]; then
+        assert_log "$container" 'listening on port 8928' 'the player came up on its port'
+        refute_config_line "$container" '^(keep-output-alive|release-device|alsa-mixer)' \
+            'the ALSA output options are not add-on options, even with a Supervisor serving them'
+    else
+        wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+            show_logs "$container"
+            fail 'a mixer on a card that does not exist left the container running'
+        }
+        assert_log "$container" "cannot open ALSA mixer '0:Master'" \
+            'the player read the mixer and refused it, so the config around it parsed'
+        assert_config_line "$container" '^keep-output-alive = 10$' \
+            'the keep-alive reached the rendered config under the key the player reads'
+        assert_config_line "$container" '^release-device = true$' \
+            'release-device reached the rendered config under the key the player reads'
+        assert_config_line "$container" '^alsa-mixer = 0:Master$' \
+            'the mixer reached the rendered config under the key the player reads'
+        assert_config_line "$container" '^alsa-mixer-curve = cubic$' \
+            'the mixer curve reached the rendered config under the key the player reads'
+    fi
+
+    # Our own refusals, so standalone only: the add-on never reads these. Each value is one the
+    # player would refuse as well, which is why only the wording proves the early check ran.
+    [ "$MODE" = standalone ] || return 0
+
+    for case in \
+        'keep_output_alive=abc|SENDSPIN_KEEP_OUTPUT_ALIVE is "abc", which is not a whole number of seconds.' \
+        'keep_output_alive=3601|SENDSPIN_KEEP_OUTPUT_ALIVE is 3601, outside the 0 to 3600 seconds the player accepts.' \
+        'release_device=yes|SENDSPIN_RELEASE_DEVICE is "yes", which is neither true nor false.' \
+        'alsa_mixer_curve=linear|SENDSPIN_ALSA_MIXER_CURVE is "linear", which is neither spec nor cubic.'; do
+        option=${case%%|*}
+        message=${case#*|}
+
+        step "the ALSA output option ${option}"
+        start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "$option"
+        container=$PLAYER
+
+        wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+            show_logs "$container"
+            fail "${option} left the container running"
+        }
+        assert_exit_code "$container" 1 "the container exits 1 on ${option}"
+        assert_log "$container" "$message" 'the log names the value it refused, and why'
+    done
+
+    for value in 0 3600; do
+        step "a keep-alive of ${value} seconds"
+        start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "keep_output_alive=${value}"
+        container=$PLAYER
+        assert_log "$container" 'listening on port 8928' 'the player came up on its port'
+        assert_config_line "$container" "^keep-output-alive = ${value}\$" \
+            'the boundary reached the rendered config unchanged'
+    done
 }
 
 # SENDSPIN_ID chose the client id up to 0.3, and upstream now refuses `id =` outright, since the

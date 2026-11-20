@@ -68,6 +68,21 @@ services:
       # policy above, a container looping on the same refusal -- so set it only
       # against a device whose capabilities `sendspin-cli -l` has confirmed.
       # SENDSPIN_AUDIO_FORMAT: flac:48000:24:2
+      # These four act on an ALSA output only, and are ignored or refused for
+      # any other. Keep an HDMI or S/PDIF output playing silence this many
+      # seconds after a stream ends, 0 to 3600, for a receiver that clips the
+      # start of the next one while it re-locks.
+      # SENDSPIN_KEEP_OUTPUT_ALIVE: 10
+      # Close the device between streams, for a `hw:` DAC another player on
+      # the host also wants. Anything but true or false stops the container.
+      # SENDSPIN_RELEASE_DEVICE: "true"
+      # Drive this hardware mixer, as <card>:<control>, for volume and mute
+      # instead of scaling the audio. `sendspin-cli -l` and `amixer -c <card>
+      # scontrols` on the host name them. The curve is `spec` (the default) or
+      # `cubic`, which tracks alsamixer's slider. A mixer the player cannot
+      # open, or one without an ALSA output, stops it from starting.
+      # SENDSPIN_ALSA_MIXER: 0:Master
+      # SENDSPIN_ALSA_MIXER_CURVE: cubic
       # A server has to pair with this player before it can play; the README's
       # Pairing section covers how. `true` lets any server on the network play
       # without pairing, and anything but true or false stops the container.

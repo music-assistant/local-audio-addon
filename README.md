@@ -26,14 +26,14 @@ Music Assistant discovers the player over mDNS and connects back in on port
 8928, which is why the container needs `network_mode: host`. Once the log reads
 
 ```
-I cli: sendspin-cli 0.4.0 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
+I cli: sendspin-cli 1.0.0 listening on port 8928 as "Living Room" (output: default, mDNS: dns_sd (avahi-compat))
 I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspin)
 ```
 
 the player is waiting to be picked up in Music Assistant's Sendspin provider,
 which then has to pair with it before it can play — see [Pairing](#pairing).
 
-This image's own configuration is twelve environment variables, all optional:
+This image's own configuration is sixteen environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -49,6 +49,10 @@ This image's own configuration is twelve environment variables, all optional:
 | `SENDSPIN_LOCAL_PAIRING_ADDRESS` | unset | The one address the token is served on; required when the above is `true` |
 | `SENDSPIN_LOCAL_PAIRING_PORT` | `8929` | The port it is served on, `1024`–`65535` |
 | `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:<channels>`, Compose only |
+| `SENDSPIN_KEEP_OUTPUT_ALIVE` | unset (off) | Seconds, `0`–`3600`, to keep an ALSA output playing silence after a stream, Compose only |
+| `SENDSPIN_RELEASE_DEVICE` | `false` | `true` closes an ALSA device between streams, Compose only |
+| `SENDSPIN_ALSA_MIXER` | unset | An ALSA hardware mixer, `<card>:<control>`, to drive for volume, Compose only |
+| `SENDSPIN_ALSA_MIXER_CURVE` | unset (`spec`) | `spec` or `cubic`, how volume maps onto that mixer, Compose only |
 
 `SENDSPIN_BUFFER_MS` is how much audio the backend keeps queued up. Raise it
 where the sound breaks up on a busy or slow machine, at the cost of a longer
@@ -95,8 +99,8 @@ track down. The Home Assistant app offers the same two as
 had to be widened to let the player exec anything at all before they would work;
 the section on the app below covers what that grants.
 
-The last variable in the table is deliberately Compose-only, and the Home
-Assistant app has no field for it.
+The last five variables in the table are deliberately Compose-only, and the
+Home Assistant app has no field for them.
 
 `SENDSPIN_AUDIO_FORMAT` is for the DAC that will only play one shape properly.
 It moves that format to the front of the list this player advertises, so a
@@ -107,6 +111,24 @@ advertise is a refusal to start rather than a fallback, and under the shipped
 the same refusal. So check the device with `sendspin-cli -l` before pinning
 one. The app has no such DAC to hold: it plays through Home Assistant's
 PulseAudio, which converts.
+
+The other four act on an ALSA output and nothing else, and the app always plays
+through PulseAudio:
+
+- `SENDSPIN_KEEP_OUTPUT_ALIVE` is for an HDMI or S/PDIF receiver that needs
+  seconds to re-lock, and swallows the start of each stream while it does. The
+  output plays silence for that long after a stream ends, then stops, so the
+  receiver can still go to standby. `SENDSPIN_RELEASE_DEVICE` turns it off.
+- `SENDSPIN_RELEASE_DEVICE=true` closes the device at each stream end and
+  reopens it at the next, for a `hw:` DAC shared with another player on the
+  host. Another app can take it in between; the player then goes without
+  audio until the device is free, retrying in the background, and picks up
+  within the same stream once it is.
+- `SENDSPIN_ALSA_MIXER` drives a hardware mixer, such as `0:Master`, for volume
+  and mute instead of scaling the audio in software. `SENDSPIN_ALSA_MIXER_CURVE`
+  picks how the volume maps onto it: `spec` by default, or `cubic` to track
+  alsamixer's slider. The player refuses to start with a mixer it cannot open,
+  or with an output that is not ALSA.
 
 `SENDSPIN_ID` is gone. Up to 0.3 it chose the identity a server files volume,
 group membership and pairing under; that identity is now the public half of a

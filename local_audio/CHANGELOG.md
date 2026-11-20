@@ -2,7 +2,7 @@
 
 ## 0.3.0
 
-Built on `sendspin-cli` v0.4.0, and through it `sendspin-cpp` v0.9.5.
+Built on `sendspin-cli` v1.0.0, and through it `sendspin-cpp` v0.10.0.
 
 **Breaking:** the player now speaks Sendspin 1.0.0-rc1, and every connection to
 it is encrypted.
@@ -26,6 +26,11 @@ it is encrypted.
   Music Assistant fetches it, and only until a server has paired; nothing else
   on your network can reach it. While
   it is on, the token is not shown in the log. Turn it off to pair by hand.
+- Home Assistant's audio output can suspend between streams: the player
+  no longer holds it open once a stream ends.
+- A change of audio format mid-stream no longer knocks the player out of sync.
+- The player no longer makes hard sync corrections while the system's time
+  service is gently adjusting the clock.
 
 ## 0.2.1
 
