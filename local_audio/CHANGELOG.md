@@ -2,7 +2,7 @@
 
 ## 0.3.0
 
-Built on `sendspin-cli` v1.0.0, and through it `sendspin-cpp` v0.10.0.
+Built on `sendspin-cli` v1.0.1, and through it `sendspin-cpp` v0.10.0.
 
 **Breaking:** the player now speaks Sendspin 1.0.0-rc1, and every connection to
 it is encrypted.

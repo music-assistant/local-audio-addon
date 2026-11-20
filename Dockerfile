@@ -2,8 +2,8 @@
 # forks it. Bump both ARGs together: the SHA is checked against the clone, so a
 # repointed tag fails the build instead of quietly shipping different code.
 # The SHA is the commit the tag points at, not the annotated tag object.
-ARG SENDSPIN_CLI_REF=v1.0.0
-ARG SENDSPIN_CLI_SHA=090e1bb6bf30d77266e7b7f65c3150a46de358db
+ARG SENDSPIN_CLI_REF=v1.0.1
+ARG SENDSPIN_CLI_SHA=ee76f35f851a468e9eae01f22354a38a98d85129
 
 # ghcr.io/home-assistant/amd64-base-debian:trixie, which ships s6-overlay v3 and
 # bashio. CI overrides this with the digest for the architecture it is building;
