@@ -2,7 +2,7 @@
 
 ## 0.3.0
 
-Built on `sendspin-cli` v0.4.0, and through it `sendspin-cpp` v0.9.5.
+Built on `sendspin-cli` v1.0.0, and through it `sendspin-cpp` v0.10.0.
 
 **Breaking:** the player now speaks Sendspin 1.0.0-rc1, and every connection to
 it is encrypted.
@@ -20,6 +20,17 @@ it is encrypted.
   player. It is off by default, and best left that way.
 - The pairing token is a password for this player. It is in the log only until
   a server pairs, and this app never writes it to a file.
+- **A Music Assistant on the same Home Assistant system pairs by itself.** The
+  new setting **Pair with Music Assistant on this machine**, on by default,
+  offers the pairing token on Home Assistant's internal network only, where
+  Music Assistant fetches it, and only until a server has paired; nothing else
+  on your network can reach it. While
+  it is on, the token is not shown in the log. Turn it off to pair by hand.
+- Home Assistant's audio output can suspend between streams: the player
+  no longer holds it open once a stream ends.
+- A change of audio format mid-stream no longer knocks the player out of sync.
+- The player no longer makes hard sync corrections while the system's time
+  service is gently adjusting the clock.
 - A new **Audio input** setting streams a line-in or microphone to Music
   Assistant, where it shows up under Live Inputs. Off by default. `audio_panel`
   uses the input chosen in this app's Audio panel, `named_source` captures a
