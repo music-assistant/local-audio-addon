@@ -171,6 +171,11 @@ machine — there is then more queued up to play through the gap. The cost is a
 longer wait when a track starts and when you seek, so raise it in steps rather
 than going straight to the top.
 
+## When something goes wrong
+
+**Log level** sets how much the player writes to this app's log. Raise it to
+`debug` while chasing a problem, and put it back to `info` afterwards.
+
 ## Switching an amplifier on with the music
 
 **Command to run when playback starts** and **Command to run when playback

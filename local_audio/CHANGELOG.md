@@ -25,7 +25,9 @@ it is encrypted.
   offers the pairing token on Home Assistant's internal network only, where
   Music Assistant fetches it, and only until a server has paired; nothing else
   on your network can reach it. While
-  it is on, the token is not shown in the log. Turn it off to pair by hand.
+  it is on, the token is not shown in the log. Turn it off to pair by hand. The
+  token is offered on port 8929; set **Local pairing port** if the log says it
+  is already in use.
 - Home Assistant's audio output can suspend between streams: the player
   no longer holds it open once a stream ends.
 - A change of audio format mid-stream no longer knocks the player out of sync.
