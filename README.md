@@ -565,10 +565,10 @@ the sync run finishes. A release job that failed after the image published does
 hold the store bump back, because the sync only runs behind a release that
 concluded green — re-running the workflow is what releases it.
 
-`main`'s `version:` can therefore sit ahead of the newest tag, and today it does:
-`0.1.12` against `v0.1.8`. That is the design rather than drift — the bump lands
-with the change and the tag is the separate decision above — and it says only
-that those versions have not been released yet.
+`main`'s `version:` can therefore sit ahead of the newest tag. That is the design
+rather than drift — the bump lands with the change and the tag is the separate
+decision above — and it says only that the versions in between have not been
+released yet.
 
 ## Store card sync
 
