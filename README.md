@@ -48,7 +48,7 @@ This image's own configuration is sixteen environment variables, all optional:
 | `SENDSPIN_LOCAL_PAIRING` | `false` | `true` serves the pairing token on one address, see [Pairing](#pairing) |
 | `SENDSPIN_LOCAL_PAIRING_ADDRESS` | unset | The one address the token is served on; required when the above is `true` |
 | `SENDSPIN_LOCAL_PAIRING_PORT` | `8929` | The port it is served on, `1024`–`65535` |
-| `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:<channels>`, Compose only |
+| `SENDSPIN_AUDIO_FORMAT` | unset | Pin a preferred `<codec>:<rate>:<depth>:2`, Compose only |
 | `SENDSPIN_KEEP_OUTPUT_ALIVE` | unset (off) | Seconds, `0`–`3600`, to keep an ALSA output playing silence after a stream, Compose only |
 | `SENDSPIN_RELEASE_DEVICE` | `false` | `true` closes an ALSA device between streams, Compose only |
 | `SENDSPIN_ALSA_MIXER` | unset | An ALSA hardware mixer, `<card>:<control>`, to drive for volume, Compose only |
@@ -108,8 +108,11 @@ server encodes to it in preference to anything else; everything the device takes
 is still offered behind it. The sharp edge is that a format the output cannot
 advertise is a refusal to start rather than a fallback, and under the shipped
 `docker-compose.yml`'s `restart: unless-stopped` that is a container looping on
-the same refusal. So check the device with `sendspin-cli -l` before pinning
-one. The app has no such DAC to hold: it plays through Home Assistant's
+the same refusal. The player advertises stereo formats only for now, so the
+channel count must be `2`, even where `sendspin-cli -l` lists more for the
+device: `-l` reports what the device takes, not what the player offers. Pick
+from the formats in the `Advertising N formats` line the player logs at start.
+The app has no such DAC to hold: it plays through Home Assistant's
 PulseAudio, which converts.
 
 The other four act on an ALSA output and nothing else, and the app always plays
@@ -294,8 +297,8 @@ The image bundles `dbus` and `avahi-daemon` so that a plain
 start is decided once, at container start, and the container logs which branch
 it took:
 
-- a D-Bus socket is already present at `/var/run/dbus/system_bus_socket`,
-  because the host's bus was bind-mounted in — the bundled pair stays down and
+- the host's bus is bind-mounted in, as the `/var/run/dbus` directory or the
+  `system_bus_socket` file alone — the bundled pair stays down and
   the player advertises through the host's Avahi. Use this when the host already
   runs Avahi, since `network_mode: host` would otherwise put two responders on
   port 5353;
