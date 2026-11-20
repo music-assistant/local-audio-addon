@@ -297,8 +297,8 @@ The image bundles `dbus` and `avahi-daemon` so that a plain
 start is decided once, at container start, and the container logs which branch
 it took:
 
-- a D-Bus socket is already present at `/var/run/dbus/system_bus_socket`,
-  because the host's bus was bind-mounted in — the bundled pair stays down and
+- the host's bus is bind-mounted in, as the `/var/run/dbus` directory or the
+  `system_bus_socket` file alone — the bundled pair stays down and
   the player advertises through the host's Avahi. Use this when the host already
   runs Avahi, since `network_mode: host` would otherwise put two responders on
   port 5353;

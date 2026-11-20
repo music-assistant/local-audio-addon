@@ -31,6 +31,9 @@ it is encrypted.
 - A change of audio format mid-stream no longer knocks the player out of sync.
 - The player no longer makes hard sync corrections while the system's time
   service is gently adjusting the clock.
+- A container that was stopped and started again, rather than recreated,
+  now advertises itself to Music Assistant again instead of going unseen
+  (#49, thanks @rfavreau).
 
 ## 0.2.1
 
