@@ -36,6 +36,9 @@ it is encrypted.
   uses the input chosen in this app's Audio panel, `named_source` captures a
   source or sink by name, such as another app's output or a Bluetooth device, and
   `test_tone` checks the path without any hardware.
+- A container that was stopped and started again, rather than recreated,
+  now advertises itself to Music Assistant again instead of going unseen
+  (#49, thanks @rfavreau).
 
 ## 0.2.1
 

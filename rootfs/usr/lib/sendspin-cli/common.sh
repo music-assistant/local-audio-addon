@@ -287,6 +287,35 @@ sendspin::warn_if_id_is_set() {
     sendspin::log 'SENDSPIN_ID is ignored: the player now identifies itself by the keypair in /data/state, so give each player its own /data volume instead.'
 }
 
+# The mount point $1 lives on: the longest mountinfo target that is $1 or one
+# of its parents. Read from mountinfo rather than with `mountpoint`, which has
+# to stat the target and is refused on a socket file bind-mounted from another
+# SELinux context. mountinfo lists targets with symlinks resolved, so /var/run
+# is compared as /run.
+sendspin::mount_point_of() {
+    local target
+    target=$(readlink -m "$1")
+    awk -v want="${target}" '
+        $5 == want || $5 == "/" || index(want, $5 "/") == 1 {
+            if (length($5) > length(best)) best = $5
+        }
+        END { print best }
+    ' /proc/self/mountinfo
+}
+
+# The host's bus only ever reaches the container through a mount: of its
+# directory, of the socket alone, or of a parent such as /run. A socket on the
+# container's own root filesystem is one our bundled dbus left in the writable
+# layer before a `docker stop`, and `docker start` reuses that layer; read as
+# the host's, it would keep the daemons down and the player unadvertised.
+sendspin::clear_stale_bus_socket() {
+    [ -S "${SYSTEM_BUS_SOCKET}" ] || return 0
+    [ "$(sendspin::mount_point_of "${SYSTEM_BUS_SOCKET}")" = / ] || return 0
+
+    rm -f "${SYSTEM_BUS_SOCKET}" "${SYSTEM_BUS_DIR}/pid"
+    sendspin::log "Cleared the D-Bus socket left at ${SYSTEM_BUS_SOCKET} by this container's previous run: no host bus is mounted there."
+}
+
 # Whether this container runs its own dbus and avahi-daemon, recorded once by
 # the sendspin-init oneshot before any of them start. The answer comes from
 # configuration alone: a runtime reachability probe is not used because both of
@@ -296,6 +325,8 @@ sendspin::decide_daemons() {
     sendspin::read_options
 
     mkdir -p "${SENDSPIN_RUN_DIR}"
+
+    sendspin::clear_stale_bus_socket
 
     if [ -S "${SYSTEM_BUS_SOCKET}" ]; then
         printf 'no\n' > "${SENDSPIN_DAEMON_DECISION}"

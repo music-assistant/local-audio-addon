@@ -159,6 +159,7 @@ readonly STOP_TIMEOUT_S=10
 readonly STOP_BUDGET_S=8
 
 WORK_DIR="$(mktemp -d)"
+readonly HOST_BUS_DIR="$WORK_DIR/bus"
 readonly WORK_DIR
 
 # Every container this run creates is named from this, so a run that died without sweeping up
@@ -666,6 +667,7 @@ start_player() {
     local hook_start='' hook_stop=''
     local local_pairing='' local_pairing_port='' local_pairing_address=''
     local keep_output_alive='' release_device='' alsa_mixer='' alsa_mixer_curve=''
+    local host_bus=''
     local pair key value
     local -a args
 
@@ -695,6 +697,7 @@ start_player() {
             stream) stream=$value ;;
             apparmor) apparmor=$value ;;
             data) data=$value ;;
+            host_bus) host_bus=$value ;;
             *) fail "start_player: unknown option '$key'" ;;
         esac
     done
@@ -732,6 +735,17 @@ start_player() {
         }
         args+=(--volume "$data:/data")
     fi
+
+    # A stand-in for the host's system bus, mapped in the two ways docker-compose.yml allows: the
+    # whole directory, or the socket alone. Writable, unlike the Compose file's `:ro`, so that a
+    # removal the image should never attempt would succeed and show. `z` because a host enforcing
+    # SELinux otherwise hides the socket, and the check would pass on one the image never saw.
+    case $host_bus in
+        '') ;;
+        dir) args+=(--volume "$HOST_BUS_DIR:/var/run/dbus:z") ;;
+        socket) args+=(--volume "$HOST_BUS_DIR/system_bus_socket:/var/run/dbus/system_bus_socket:z") ;;
+        *) fail "start_player: host_bus is dir or socket, not '$host_bus'" ;;
+    esac
 
     # Not an option in either mode, so delivered the same way in both: the add-on's default is the
     # hassio bridge, which no container here has.
@@ -1129,6 +1143,80 @@ check_advertise_mode() {
     pass 'docker reports the container healthy, so the HEALTHCHECK instruction runs'
 
     assert_clean_stop "$container"
+}
+
+# Waits until `text` has appeared `count` times in a container's output. A restarted container
+# keeps the log of its first boot, so a line both boots print says nothing about the second until
+# it has been printed twice.
+assert_log_count() {
+    local container=$1 text=$2 count=$3 what=$4
+    local waited=0 seen=0
+    while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
+        seen=$(grep -c -F -e "$text" "$(logs_of "$container")" || true)
+        if [ "$seen" -ge "$count" ]; then
+            pass "$what"
+            return 0
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    show_logs "$container"
+    fail "$what -- '$text' appears $seen times in the container log, not $count"
+}
+
+# `docker stop` then `docker start` keeps the container's writable layer, and with it the socket
+# the bundled dbus left in /run/dbus (#49). Read as the host's bus, that kept both daemons down
+# and the player unadvertised. `recreate_player` cannot catch it: a new container starts on a
+# clean layer.
+check_stop_and_start() {
+    local container
+    step 'stop and start of the same container'
+    start_player "name=$PLAYER_NAME" 'output=null' "log_level=$PLAYER_LOG_LEVEL"
+    container=$PLAYER
+
+    assert_log "$container" 'mdns: advertising _sendspin._tcp' 'the first boot advertised'
+    docker stop --timeout "$STOP_TIMEOUT_S" "$container" >/dev/null || fail 'could not stop the player'
+    docker start "$container" >/dev/null || fail 'could not start the stopped player again'
+
+    assert_log "$container" 'Cleared the D-Bus socket left at /var/run/dbus/system_bus_socket' \
+        "the second boot clears the socket the first boot's dbus left behind"
+    assert_log_count "$container" \
+        'Starting the bundled dbus and avahi-daemon to advertise this player over mDNS.' 2 \
+        'the second boot starts the bundled daemons again'
+    assert_log_count "$container" 'mdns: advertising _sendspin._tcp' 2 \
+        'the second boot advertises again'
+    refute_log "$container" 'Host D-Bus socket present' \
+        'the leftover socket is not taken for the host bus'
+    assert_process "$container" avahi-daemon 'the bundled avahi-daemon runs after the restart'
+    assert_process "$container" dbus-daemon 'the bundled dbus-daemon runs after the restart'
+}
+
+# The other side of the stop-and-start fix: a socket under a bind mount is the host's, however it
+# got there, and the image must neither take it for its own leftover nor touch it. Nothing listens
+# on the stand-in socket, which is the point -- the decision is made from configuration alone.
+check_host_bus_mounted() {
+    local container how
+    step 'a host D-Bus mapped in'
+    mkdir -p "$HOST_BUS_DIR"
+    rm -f "$HOST_BUS_DIR/system_bus_socket"
+    python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' \
+        "$HOST_BUS_DIR/system_bus_socket" || fail 'could not make the stand-in host bus socket'
+
+    for how in dir socket; do
+        start_player "name=$PLAYER_NAME" 'output=null' "log_level=$PLAYER_LOG_LEVEL" \
+            "host_bus=$how"
+        container=$PLAYER
+
+        assert_log "$container" 'Host D-Bus socket present at /var/run/dbus/system_bus_socket' \
+            "with the bus mapped in as a $how, the container defers to the host's"
+        assert_log "$container" "Advertising \"${PLAYER_NAME}\" over mDNS" 'the player was started'
+        refute_log "$container" 'Cleared the D-Bus socket' 'and does not clear the host socket'
+        refute_process "$container" avahi-daemon 'the bundled avahi-daemon stays down'
+        refute_process "$container" dbus-daemon 'the bundled dbus-daemon stays down'
+        [ -S "$HOST_BUS_DIR/system_bus_socket" ] ||
+            fail "the host's socket is gone after a container with it mapped in as a $how"
+        pass 'the host socket is untouched'
+    done
 }
 
 # The name a user who never opened the configuration screen ends up with. It is a fixed string
@@ -2029,6 +2117,8 @@ main() {
     printf 'smoke: testing %s in %s mode\n' "$IMAGE" "$MODE"
 
     check_advertise_mode
+    check_stop_and_start
+    check_host_bus_mounted
     check_default_name
     check_default_output
     check_mdns_server_mode
