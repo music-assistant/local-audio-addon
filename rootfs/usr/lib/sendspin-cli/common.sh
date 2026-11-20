@@ -749,34 +749,47 @@ sendspin::pulse_short_names() {
     awk -F '\t' 'NF > 1 { printf "%s%s", separator, $2; separator = ", " } END { print "" }'
 }
 
-# Whether the player should capture SENDSPIN_INPUT, saying why not. A bare `pulse`
-# is the Audio panel's input, where a monitor is never a choice the user made:
-# the panel offers none, so it can only be PulseAudio's fallback for a machine
-# with no input. Bounded by sendspin::pactl, and a PulseAudio that cannot answer
-# reads as no.
-sendspin::app_input_is_usable() {
-    local name=${SENDSPIN_INPUT#pulse} sources='' sinks='' info='' own_sink='' panel=''
-    local reason='Home Assistant audio could not be asked'
+# Why the player should not capture the add-on input $1, or nothing when it may.
+# The rest is what PulseAudio said: `pactl list short sources`, `... sinks`,
+# `pactl info`, and the client.conf text, empty when there is none. Kept apart
+# from the pactl calls so the decision can be tested on canned output.
+#
+# A bare `pulse` is the Audio panel's input, where a monitor is never a choice
+# the user made: the panel offers none, so it can only be PulseAudio's fallback
+# for a machine with no input.
+sendspin::app_input_refusal() {
+    local input=$1 sources=$2 sinks=$3 info=$4 conf=$5
+    local name=${input#pulse} own_sink panel
 
     name=${name#:}
+    own_sink=$(sendspin::pulse_conf_default_sink <<< "${conf}")
+    panel=$(sendspin::pulse_conf_default_source <<< "${conf}")
+    : "${own_sink:=$(sendspin::pulse_info_default_sink <<< "${info}")}"
+
+    if [ "${input}" = pulse ]; then
+        name=${panel:-$(sendspin::pulse_info_default_source <<< "${info}")}
+        if [ "${name}" != "${name%.monitor}" ]; then
+            printf '%s\n' 'this machine has no audio input to use'
+            return 0
+        fi
+    fi
+
+    sendspin::input_refusal "${name}" "${sources}" "${sinks}" "${own_sink}"
+}
+
+# Whether the player should capture SENDSPIN_INPUT, saying why not. Bounded by
+# sendspin::pactl, and a PulseAudio that cannot answer reads as no.
+sendspin::app_input_is_usable() {
+    local sources='' sinks='' info='' conf=''
+    local reason='Home Assistant audio could not be asked'
 
     if [ -S "${PULSE_SOCKET}" ] && sources=$(sendspin::pactl list short sources) \
         && sinks=$(sendspin::pactl list short sinks) && info=$(sendspin::pactl info); then
         if [ -r "${PULSE_CLIENT_CONF}" ]; then
-            own_sink=$(sendspin::pulse_conf_default_sink < "${PULSE_CLIENT_CONF}")
-            panel=$(sendspin::pulse_conf_default_source < "${PULSE_CLIENT_CONF}")
+            conf=$(< "${PULSE_CLIENT_CONF}")
         fi
-        : "${own_sink:=$(sendspin::pulse_info_default_sink <<< "${info}")}"
-
-        if [ "${SENDSPIN_INPUT}" = pulse ]; then
-            name=${panel:-$(sendspin::pulse_info_default_source <<< "${info}")}
-        fi
-
-        if [ "${SENDSPIN_INPUT}" = pulse ] && [ "${name}" != "${name%.monitor}" ]; then
-            reason='this machine has no audio input to use'
-        else
-            reason=$(sendspin::input_refusal "${name}" "${sources}" "${sinks}" "${own_sink}")
-        fi
+        reason=$(sendspin::app_input_refusal "${SENDSPIN_INPUT}" "${sources}" "${sinks}" \
+            "${info}" "${conf}")
     fi
 
     if [ -n "${reason}" ]; then
