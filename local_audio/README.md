@@ -121,6 +121,28 @@ also the way to find a name to use. That covers a name that is not there, so a
 Bluetooth device has to be connected before the app starts: restart the app once it
 is.
 
+### An input that is missing while nothing is plugged in
+
+Many sound cards offer no input at all until something is plugged into the
+line-in or mic socket, because the card starts on a profile that has outputs
+only. **Input card profile** switches a card to a profile that has an input as
+well, when this app starts, so the input is there to pick in the Audio panel or
+to name in **Input source name**. Unplugging afterwards leaves it in place.
+
+Set it to the card's name and the profile's, separated by a colon:
+
+```text
+alsa_card.pci-0000_00_1f.3:output:analog-stereo+input:analog-stereo
+```
+
+`ha audio info` lists both. Set a name that is not there, and the log lists the
+profiles that would work. The app only switches to a profile that is available
+and keeps the card's current output, so the speakers keep playing.
+
+This changes the card for **every app and add-on** on this machine, not just this
+one, and Home Assistant keeps the change across restarts. To undo it, empty the
+setting and pick the card's previous profile in the Home Assistant **Audio** panel.
+
 Music Assistant must not get its own audio back, so this app refuses to capture the
 output it plays to. `audio_panel` also refuses to fall back on capturing what this
 machine plays when it has no real input.

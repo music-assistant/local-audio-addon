@@ -36,6 +36,11 @@ it is encrypted.
   uses the input chosen in this app's Audio panel, `named_source` captures a
   source or sink by name, such as another app's output or a Bluetooth device, and
   `test_tone` checks the path without any hardware.
+- A new **Input card profile** setting, empty by default, switches a sound card
+  to a profile with an input when this app starts, for cards that offer no input
+  while nothing is plugged in (#55). It changes the card for every app on this
+  machine, so it only switches to a profile that is available and keeps the
+  card's output, and the log says why when it does not.
 - A container that was stopped and started again, rather than recreated,
   now advertises itself to Music Assistant again instead of going unseen
   (#49, thanks @rfavreau).

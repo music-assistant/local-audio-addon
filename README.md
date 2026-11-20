@@ -358,9 +358,9 @@ passing the matching digest, which is what CI does per architecture. A plain
 
 `local_audio/` is the app manifest, wrapping this same image, so the runtime
 behaviour described above is shared. It reads its `name`, `log_level`, `input`,
-`input_source`, `server`, `buffer_ms`, `allow_unpaired`, `local_pairing`,
-`local_pairing_port`, `hook_start` and `hook_stop` from the app options instead of
-the environment.
+`input_source`, `input_card_profile`, `server`, `buffer_ms`, `allow_unpaired`,
+`local_pairing`, `local_pairing_port`, `hook_start` and `hook_stop` from the app
+options instead of the environment.
 
 The app's `input` is a dropdown rather than upstream's value. `test_tone` renders
 as `input = tone`. `audio_panel` renders as `input = pulse`, which captures from
@@ -372,6 +372,13 @@ a line in the log naming what it can see, because the first would stream the
 machine's own output back and the second would stop the player. `audio_panel` also
 refuses any monitor, which can only be PulseAudio's fallback on a machine with no
 input, since the panel offers none.
+
+`input_card_profile`, `<card>:<profile>`, has no Compose equivalent. Before the input
+check, the run script switches that card with `pactl set-card-profile`, never
+sticky, and only to a profile that is listed, is not `available: no`, has an input,
+and keeps the card's current `output:` side. PulseAudio itself accepts any profile,
+including one that drops the sink. Anything else is a log line, and the player
+starts either way.
 
 `local_pairing` is on by default there, and binds the endpoint to `172.30.32.1`,
 the host's side of Home Assistant OS's `hassio` network: Music Assistant runs on
