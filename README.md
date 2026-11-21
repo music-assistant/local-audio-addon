@@ -15,11 +15,65 @@ Discovery and playback are local-network only. There is no reverse-proxy,
 HTTPS or overlay-network story, and deployments other than Docker Compose and
 the Home Assistant app are not supported.
 
-## Quickstart with Docker Compose
+## Standalone Docker Compose project
+
+`docker-compose.yml` and `.env.example` in the root of this repository are a
+ready-to-use Compose project for the **standalone operation outside the Home
+Assistant OS apps**: a Linux host with Docker, next to Music Assistant. They are
+not meant for Home Assistant OS, which installs the app from `local_audio/`
+instead, see [Home Assistant app](#home-assistant-app).
 
 ```sh
+cp .env.example .env
 docker compose up -d
 docker compose logs -f
+```
+
+It pulls the published image (`ghcr.io/music-assistant/local-audio-addon`)
+instead of building it, and differs from the startup of the image described
+below in these ways:
+
+- **It does not run as root.** The player runs as the user and group in
+  `LOCAL_AUDIO_USER_ID` and `LOCAL_AUDIO_USER_GROUP` (1000 by default), which
+  must be allowed to use the audio socket of the host.
+- **Only `sendspin-cli` runs.** The compose file replaces the entrypoint, so
+  there is no s6-overlay and no bundled `dbus` or `avahi-daemon`. The player
+  announces itself through the Avahi of the host, which it reaches through the
+  D-Bus socket of the host (`/var/run/dbus`, mounted read-only). Without an Avahi
+  on the host, set `LOCAL_AUDIO_SERVER` to dial out to a server instead. On hosts
+  with AppArmor enabled (for example Ubuntu) the profile `docker-default` can
+  keep the player from registering with Avahi; the log then says `could not
+  register _sendspin._tcp`. Run the container with `security_opt:
+  apparmor=unconfined` there, which removes the AppArmor protection of that
+  container.
+- **The options are `LOCAL_AUDIO_*` variables,** set in the `.env`, and not the
+  `SENDSPIN_*` variables of the table below: name, port, output, log level,
+  buffer, audio format, server, id, allow-unpaired and the two hooks. The
+  input, the ALSA mixer options, the output keep-alive, releasing the device and
+  local pairing are not available in this project. Every option is described in
+  `.env.example`.
+- **The control socket is on the host.** The player creates it as
+  `/run/<container name>/control.sock` (mode `0600`, owned by the user above), so
+  that programs on the host running as the same user can talk to the player
+  (inside the container, `docker compose exec local-audio sendspin-cli status
+  --control-socket /control/control.sock` shows what the player reports). The
+  directory, not the socket, is mounted, so that the socket is created again
+  when the container restarts.
+
+A server has to pair with the player before it can play, see
+[Pairing](#pairing). `.env.example` explains `LOCAL_AUDIO_ALLOW_UNPAIRED`. The
+control socket is only reachable on the host: the Home Assistant app does not
+make it available outside its container.
+
+## Quickstart with Docker Compose
+
+To build the image from source and run it with the startup of the image,
+including the bundled `dbus` and `avahi-daemon` and the `SENDSPIN_*` variables,
+use `docker-compose-build.yml`:
+
+```sh
+docker compose -f docker-compose-build.yml up -d
+docker compose -f docker-compose-build.yml logs -f
 ```
 
 Music Assistant discovers the player over mDNS and connects back in on port
@@ -92,7 +146,7 @@ What the event was arrives in the environment:
 
 Anything unknown for an event is unset rather than empty, so `[ -n "$SENDSPIN_SERVER_ID" ]`
 means what it looks like. To read one of them inside a command written in
-`docker-compose.yml`, double the dollar — `$$SENDSPIN_EVENT`. A single `$` is
+`docker-compose-build.yml`, double the dollar — `$$SENDSPIN_EVENT`. A single `$` is
 expanded by `docker compose` itself before the container starts, so the hook is
 handed an empty string, and a command that quietly does nothing is a hard fault to
 track down. The Home Assistant app offers the same two as
@@ -108,7 +162,7 @@ It moves that format to the front of the list this player advertises, so a
 server encodes to it in preference to anything else; everything the device takes
 is still offered behind it. The sharp edge is that a format the output cannot
 advertise is a refusal to start rather than a fallback, and under the shipped
-`docker-compose.yml`'s `restart: unless-stopped` that is a container looping on
+`docker-compose-build.yml`'s `restart: unless-stopped` that is a container looping on
 the same refusal. The player advertises stereo formats only for now, so the
 channel count must be `2`, even where `sendspin-cli -l` lists more for the
 device: `-l` reports what the device takes, not what the player offers. Pick
@@ -254,7 +308,7 @@ covers what that looks like in a log and how long it keeps trying.
 
 Bind-mount the host's PulseAudio socket, point `PULSE_SERVER` at where it landed
 and set `SENDSPIN_OUTPUT` to `pulse`, or to `pulse:<sink>` for a specific one;
-`docker-compose.yml` carries the mount and the environment commented out. A bare
+`docker-compose-build.yml` carries the mount and the environment commented out. A bare
 `pulse` follows whichever sink the server calls default, resolved afresh at every
 stream.
 
@@ -552,8 +606,9 @@ of publishing an empty body. A release wanting more than the sections say is
 still edited by hand afterwards.
 
 Attached to it is a `docker-compose.yml` pinned to the released image, which
-`scripts/compose_pinned.sh` generates from the one in this repository by
-replacing `build: .` with the image that was published. It is generated rather
+`scripts/compose_pinned.sh` generates from `docker-compose-build.yml` in this
+repository by replacing `build: .` with the image that was published. It is not
+the `docker-compose.yml` of the standalone project above. It is generated rather
 than kept as a second copy so the two cannot drift, and it is never committed.
 
 Once the whole workflow succeeds — the Release included —

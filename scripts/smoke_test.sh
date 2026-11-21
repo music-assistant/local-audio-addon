@@ -741,7 +741,7 @@ start_player() {
         args+=(--volume "$data:/data")
     fi
 
-    # A stand-in for the host's system bus, mapped in the two ways docker-compose.yml allows: the
+    # A stand-in for the host's system bus, mapped in the two ways docker-compose-build.yml allows: the
     # whole directory, or the socket alone. Writable, unlike the Compose file's `:ro`, so that a
     # removal the image should never attempt would succeed and show. `z` because a host enforcing
     # SELinux otherwise hides the socket, and the check would pass on one the image never saw.

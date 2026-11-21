@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Prints the repository's docker-compose.yml with `build: .` replaced by the image that was
+# Prints the repository's docker-compose-build.yml with `build: .` replaced by the image that was
 # published, for attaching to a GitHub Release.
 #
 # A Docker user who downloads it gets a file that pulls a released image rather than compiling
@@ -10,7 +10,7 @@
 # copy, so the two cannot drift.
 #
 # Testable rather than a `sed` inside release.yml, because release.yml runs only on a tag: an
-# inline transform is first exercised by a real release, and docker-compose.yml is a file that
+# inline transform is first exercised by a real release, and docker-compose-build.yml is a file that
 # ordinary pull requests edit. Turning `build: .` into a block `build:` with a `context:` under
 # it is an entirely reasonable change that would leave nothing to substitute, and the pull
 # request making it should be the thing that goes red.
@@ -25,7 +25,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 readonly SCRIPT_DIR
 
 IMAGE=''
-COMPOSE="$SCRIPT_DIR/../docker-compose.yml"
+COMPOSE="$SCRIPT_DIR/../docker-compose-build.yml"
 
 usage() {
     printf 'usage: %s --image REPOSITORY:TAG [--compose PATH]\n' "$0" >&2
