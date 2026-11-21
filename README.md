@@ -69,11 +69,11 @@ make it available outside its container.
 
 To build the image from source and run it with the startup of the image,
 including the bundled `dbus` and `avahi-daemon` and the `SENDSPIN_*` variables,
-use `docker-compose-build.yml`:
+use `docker-compose.build.yml`:
 
 ```sh
-docker compose -f docker-compose-build.yml up -d
-docker compose -f docker-compose-build.yml logs -f
+docker compose -f docker-compose.build.yml up -d
+docker compose -f docker-compose.build.yml logs -f
 ```
 
 Music Assistant discovers the player over mDNS and connects back in on port
@@ -146,7 +146,7 @@ What the event was arrives in the environment:
 
 Anything unknown for an event is unset rather than empty, so `[ -n "$SENDSPIN_SERVER_ID" ]`
 means what it looks like. To read one of them inside a command written in
-`docker-compose-build.yml`, double the dollar — `$$SENDSPIN_EVENT`. A single `$` is
+`docker-compose.build.yml`, double the dollar — `$$SENDSPIN_EVENT`. A single `$` is
 expanded by `docker compose` itself before the container starts, so the hook is
 handed an empty string, and a command that quietly does nothing is a hard fault to
 track down. The Home Assistant app offers the same two as
@@ -162,7 +162,7 @@ It moves that format to the front of the list this player advertises, so a
 server encodes to it in preference to anything else; everything the device takes
 is still offered behind it. The sharp edge is that a format the output cannot
 advertise is a refusal to start rather than a fallback, and under the shipped
-`docker-compose-build.yml`'s `restart: unless-stopped` that is a container looping on
+`docker-compose.build.yml`'s `restart: unless-stopped` that is a container looping on
 the same refusal. The player advertises stereo formats only for now, so the
 channel count must be `2`, even where `sendspin-cli -l` lists more for the
 device: `-l` reports what the device takes, not what the player offers. Pick
@@ -308,7 +308,7 @@ covers what that looks like in a log and how long it keeps trying.
 
 Bind-mount the host's PulseAudio socket, point `PULSE_SERVER` at where it landed
 and set `SENDSPIN_OUTPUT` to `pulse`, or to `pulse:<sink>` for a specific one;
-`docker-compose-build.yml` carries the mount and the environment commented out. A bare
+`docker-compose.build.yml` carries the mount and the environment commented out. A bare
 `pulse` follows whichever sink the server calls default, resolved afresh at every
 stream.
 
@@ -606,7 +606,7 @@ of publishing an empty body. A release wanting more than the sections say is
 still edited by hand afterwards.
 
 Attached to it is a `docker-compose.yml` pinned to the released image, which
-`scripts/compose_pinned.sh` generates from `docker-compose-build.yml` in this
+`scripts/compose_pinned.sh` generates from `docker-compose.build.yml` in this
 repository by replacing `build: .` with the image that was published. It is not
 the `docker-compose.yml` of the standalone project above. It is generated rather
 than kept as a second copy so the two cannot drift, and it is never committed.
