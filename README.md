@@ -33,37 +33,47 @@ It pulls the published image (`ghcr.io/music-assistant/local-audio-addon`)
 instead of building it, and differs from the startup of the image described
 below in these ways:
 
-- **It does not run as root.** The player runs as the user and group in
-  `LOCAL_AUDIO_USER_ID` and `LOCAL_AUDIO_USER_GROUP` (1000 by default), which
-  must be allowed to use the audio socket of the host.
-- **Only `sendspin-cli` runs.** The compose file replaces the entrypoint, so
-  there is no s6-overlay and no bundled `dbus` or `avahi-daemon`. The player
-  announces itself through the Avahi of the host, which it reaches through the
-  D-Bus socket of the host (`/var/run/dbus`, mounted read-only). Without an Avahi
-  on the host, set `LOCAL_AUDIO_SERVER` to dial out to a server instead. On hosts
-  with AppArmor enabled (for example Ubuntu) the profile `docker-default` can
-  keep the player from registering with Avahi; the log then says `could not
-  register _sendspin._tcp`. Run the container with `security_opt:
-  apparmor=unconfined` there, which removes the AppArmor protection of that
-  container.
-- **The options are `LOCAL_AUDIO_*` variables,** set in the `.env`, and not the
-  `SENDSPIN_*` variables of the table below: name, port, output, log level,
-  buffer, audio format, server, id, allow-unpaired and the two hooks. The
-  input, the ALSA mixer options, the output keep-alive, releasing the device and
-  local pairing are not available in this project. Every option is described in
-  `.env.example`.
-- **The control socket is on the host.** The player creates it as
-  `/run/<container name>/control.sock` (mode `0600`, owned by the user above), so
-  that programs on the host running as the same user can talk to the player
-  (inside the container, `docker compose exec local-audio sendspin-cli status
-  --control-socket /control/control.sock` shows what the player reports). The
-  directory, not the socket, is mounted, so that the socket is created again
-  when the container restarts.
+- **It does not run as root.** s6-overlay and the player run as the user and
+  group in `LOCAL_AUDIO_USER_ID` and `LOCAL_AUDIO_USER_GROUP` (1000 by default),
+  which must be allowed to use the audio socket of the host.
+- **It announces itself through the Avahi of the host.** The bundled `dbus` and
+  `avahi-daemon` need root and do not start as a regular user, so the D-Bus
+  socket of the host (`/var/run/dbus`, mounted read-only) is mounted and the
+  player reaches the Avahi of the host through it. Avahi has to run on the host.
+  Without one, set `SENDSPIN_SERVER` to dial out to a server instead. On hosts
+  with AppArmor enabled (for example Ubuntu) the profile `docker-default` keeps
+  the player from registering with Avahi (the log says `could not register
+  _sendspin._tcp`), so the compose file sets `security_opt:
+  apparmor=unconfined`, which removes the AppArmor protection of that container.
+- **It is named after the host.** Unless `SENDSPIN_NAME` is set, the name in
+  Music Assistant is the hostname, where the image alone would call every player
+  `Local Audio`. An entrypoint sets it before s6-overlay of the image takes over.
+- **The options are the `SENDSPIN_*` variables** of the table below, set in the
+  `.env`, exactly as in `docker-compose.build.yml`, and so are the variables of
+  the sound server that its client libraries read (`PIPEWIRE_REMOTE`).
+  `.env.example` lists them with their descriptions. The settings of the project
+  itself have their own names (`LOCAL_AUDIO_*`): the image and its tag, the
+  directory of the control socket on the host, the user, and the sound server of
+  the host: `LOCAL_AUDIO_XDG_RUNTIME_DIR`, its directory, which is mounted at the
+  same path, `LOCAL_AUDIO_PULSE_SERVER`, its address, and
+  `LOCAL_AUDIO_PULSE_COOKIE`, its cookie.
+- **The control socket is on the host.** The directory `/run/sendspin-cli`, where
+  the image keeps its control socket and the rendered configuration, is mounted
+  from `LOCAL_AUDIO_CONTROL_DIR` on the host (default `/run/sendspin-cli`), so
+  `control.sock` is in that directory (mode `0600`, owned by the user above).
+  The path in the container is fixed by the image. Programs on the host running
+  as the same user can talk to the player through the socket; `docker compose
+  exec local-audio sendspin-cli status --control-socket
+  /run/sendspin-cli/control.sock` shows what the player reports. The directory,
+  not the socket, is mounted, so that the socket is created again when the
+  container restarts.
+- **One player per host.** The player listens on port 8928, which is not an
+  option, so a second player on the same host needs a different network
+  namespace.
 
 A server has to pair with the player before it can play, see
-[Pairing](#pairing). `.env.example` explains `LOCAL_AUDIO_ALLOW_UNPAIRED`. The
-control socket is only reachable on the host: the Home Assistant app does not
-make it available outside its container.
+[Pairing](#pairing). The control socket is only reachable on the host: the Home
+Assistant app does not make it available outside its container.
 
 ## Quickstart with Docker Compose
 
