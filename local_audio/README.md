@@ -162,6 +162,13 @@ through a proxy.
 Do not put credentials in this field. It is shown as plain text on the
 configuration page and is included in Home Assistant backups.
 
+## Choosing the port
+
+The player listens on port 8928, and the server connects back to it there. If
+something else on this machine already uses that port, for example another
+player, set **Port** to another one between 1024 and 65535 and leave it empty
+otherwise.
+
 ## If the sound breaks up
 
 **Audio buffer** is how much audio the player keeps queued up, in milliseconds.
@@ -263,6 +270,14 @@ If it does not come back inside that minute the player stops asking and says so
 in its log, rather than retrying forever. Nothing is stuck: the next track opens
 the output afresh, so playing something new is the way back once whatever went
 missing is there again.
+
+## Controlling the player from another program
+
+The player's control socket, `control.sock`, is in the config folder of this app.
+A program that controls the player through it, for example a voice assistant that
+lowers the volume while it talks, finds it there. The same folder holds the file
+the player is started with, which carries the login of the **Music Assistant
+server** you set, if it has one, so only give the folder to apps you trust.
 
 ## Known rough edges
 

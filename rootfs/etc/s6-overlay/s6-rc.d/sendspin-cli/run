@@ -28,7 +28,7 @@ if [ "${decision}" = 'yes' ]; then
     sendspin::wait_for_socket "${AVAHI_SOCKET}"
 fi
 
-mkdir -p "${SENDSPIN_STATE_DIR}" "${SENDSPIN_RUN_DIR}"
+mkdir -p "${SENDSPIN_STATE_DIR}" "${SENDSPIN_RUN_DIR}" "${SENDSPIN_SOCKET_DIR}"
 
 # Created ahead of the write because a server value can carry credentials, and
 # the file is something a support thread will ask a user to paste.
@@ -51,6 +51,9 @@ install -m 600 /dev/null "${SENDSPIN_CONF}"
     printf 'product-name = %s\n' 'Local Audio'
     if [ -n "${SENDSPIN_BUFFER_MS}" ]; then
         printf 'buffer-ms = %s\n' "${SENDSPIN_BUFFER_MS}"
+    fi
+    if [ -n "${SENDSPIN_PORT}" ]; then
+        printf 'port = %s\n' "$((10#${SENDSPIN_PORT}))"
     fi
     if [ -n "${SENDSPIN_AUDIO_FORMAT}" ]; then
         printf 'audio-format = %s\n' "${SENDSPIN_AUDIO_FORMAT}"

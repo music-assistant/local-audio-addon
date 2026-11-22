@@ -582,7 +582,7 @@ pairing_token_of() {
     local waited=0 token
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
         if token=$(docker exec "$container" \
-            sendspin-cli pair-token --control-socket /run/sendspin-cli/control.sock 2>/dev/null); then
+            sendspin-cli pair-token --control-socket /run/sendspin-cli/socket/control.sock 2>/dev/null); then
             printf '%s\n' "$token"
             return 0
         fi
@@ -598,7 +598,7 @@ client_id_of() {
     local waited=0 out
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
         if out=$(docker exec "$container" \
-            sendspin-cli status --control-socket /run/sendspin-cli/control.sock 2>/dev/null); then
+            sendspin-cli status --control-socket /run/sendspin-cli/socket/control.sock 2>/dev/null); then
             sed -n 's/^client id: //p' <<<"$out"
             return 0
         fi
@@ -630,7 +630,7 @@ assert_token_kept_private() {
     fi
     pass 'the pairing token is in the log no more than upstream says it once'
 
-    # -D skip, for the control socket that sits beside the rendered config.
+    # -D skip, for the control socket that sits below the rendered config.
     files=$(docker exec "$container" grep -r -l -D skip -F -e "$token" /data /run/sendspin-cli || true)
     if [ -n "$files" ]; then
         fail "the pairing token was written to $(tr '\n' ' ' <<<"$files")"
@@ -665,7 +665,7 @@ retire_player() {
 # the list that dies with it.
 start_player() {
     local name='' output='' log_level='' server='' apparmor='' stream='' data=''
-    local buffer_ms='' audio_format='' legacy_id='' allow_unpaired='' input='' input_source=''
+    local buffer_ms='' port='' audio_format='' legacy_id='' allow_unpaired='' input='' input_source=''
     local input_card_profile='' pulse=''
     local hook_start='' hook_stop=''
     local local_pairing='' local_pairing_port='' local_pairing_address=''
@@ -683,6 +683,7 @@ start_player() {
             log_level) log_level=$value ;;
             server) server=$value ;;
             buffer_ms) buffer_ms=$value ;;
+            port) port=$value ;;
             audio_format) audio_format=$value ;;
             legacy_id) legacy_id=$value ;;
             allow_unpaired) allow_unpaired=$value ;;
@@ -741,7 +742,7 @@ start_player() {
         args+=(--volume "$data:/data")
     fi
 
-    # A stand-in for the host's system bus, mapped in the two ways docker-compose.yml allows: the
+    # A stand-in for the host's system bus, mapped in the two ways docker-compose.build.yml allows: the
     # whole directory, or the socket alone. Writable, unlike the Compose file's `:ro`, so that a
     # removal the image should never attempt would succeed and show. `z` because a host enforcing
     # SELinux otherwise hides the socket, and the check would pass on one the image never saw.
@@ -775,7 +776,7 @@ start_player() {
     # stronger statement about the split than never offering it would be.
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
-            "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
+            "server=$server" "buffer_ms=$buffer_ms" "port=$port" "audio_format=$audio_format" \
             "allow_unpaired=$allow_unpaired" "input=$input" "input_source=$input_source" \
             "input_card_profile=$input_card_profile" \
             "hook_start=$hook_start" "hook_stop=$hook_stop" \
@@ -791,6 +792,7 @@ start_player() {
         if [ -n "$log_level" ]; then args+=(--env "SENDSPIN_LOG_LEVEL=$log_level"); fi
         if [ -n "$server" ]; then args+=(--env "SENDSPIN_SERVER=$server"); fi
         if [ -n "$buffer_ms" ]; then args+=(--env "SENDSPIN_BUFFER_MS=$buffer_ms"); fi
+        if [ -n "$port" ]; then args+=(--env "SENDSPIN_PORT=$port"); fi
         if [ -n "$audio_format" ]; then args+=(--env "SENDSPIN_AUDIO_FORMAT=$audio_format"); fi
         if [ -n "$legacy_id" ]; then args+=(--env "SENDSPIN_ID=$legacy_id"); fi
         if [ -n "$allow_unpaired" ]; then
@@ -1085,6 +1087,8 @@ check_advertise_mode() {
     # configured on, which is the one every user who never opened the settings is running.
     refute_config_line "$container" '^buffer-ms' \
         'an unset buffer is left out, so the player keeps its own default'
+    refute_config_line "$container" '^port' \
+        'an unset port is left out, so the player keeps its own'
     refute_config_line "$container" '^audio-format' \
         'an unset audio format is left out rather than pinning a shape nobody asked for'
     refute_config_line "$container" '^allow-unpaired' \
@@ -1108,7 +1112,7 @@ check_advertise_mode() {
 
     status_out="$WORK_DIR/${container}.status"
     docker exec "$container" \
-        sendspin-cli status --control-socket /run/sendspin-cli/control.sock >"$status_out" 2>&1 ||
+        sendspin-cli status --control-socket /run/sendspin-cli/socket/control.sock >"$status_out" 2>&1 ||
         fail "sendspin-cli status exited $? -- $(cat "$status_out")"
     if ! grep -F -e 'output: null' "$status_out" >/dev/null; then
         cat "$status_out" >&2
@@ -1453,6 +1457,66 @@ check_buffer_ms() {
         refute_log "$container" 'listening on port 8928' \
             'no player was started on a buffer the player would have refused anyway'
     done
+}
+
+# The player's own port, set by an environment variable under Compose and by the `port` option in
+# the add-on. The refusals are the shape and the range the pairing port is held to, plus the one
+# thing two listeners cannot do, which is share a port. The add-on's schema refuses a bad value
+# before it arrives, which the stand-in Supervisor does not, so it is the shared read that is
+# under test in both modes. The player has to come up on the port it was given, and not merely
+# have it rendered: `port` is a key the image writes and the player reads, and only the log shows
+# the second half.
+check_port() {
+    local container case value message
+
+    step 'a configured port'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'port=18928'
+    container=$PLAYER
+    assert_log "$container" 'listening on port 18928' 'the player came up on the port it was given'
+    assert_config_line "$container" '^port = 18928$' \
+        'the port reached the rendered config under the key the player reads'
+    refute_log "$container" 'listening on port 8928' 'and not on its default'
+
+    # A leading zero is decimal, as in the pairing port: `10#` is what keeps 09000 from being read as
+    # an octal number that does not exist.
+    step 'a port with a leading zero'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'port=09000'
+    container=$PLAYER
+    assert_log "$container" 'listening on port 9000' 'a leading zero is read as decimal'
+    assert_config_line "$container" '^port = 9000$' 'and rendered without it'
+
+    for case in \
+        'abc|SENDSPIN_PORT is "abc", which is not a port number.' \
+        '80|SENDSPIN_PORT is 80, outside 1024 to 65535.' \
+        '65536|SENDSPIN_PORT is 65536, outside 1024 to 65535.' \
+        '18446744073709560544|SENDSPIN_PORT is 18446744073709560544, outside 1024 to 65535.'; do
+        value=${case%%|*}
+        message=${case#*|}
+
+        step "the port ${value}"
+        start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" "port=${value}"
+        container=$PLAYER
+
+        wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+            show_logs "$container"
+            fail "a port of ${value} left the container running"
+        }
+        assert_exit_code "$container" 1 "the container exits 1 on a port of ${value}"
+        assert_log "$container" "$message" 'the log names the value it refused, and why'
+        refute_log "$container" 'listening on port' 'no player was started on a port that is not one'
+    done
+
+    step 'the player port as the pairing port'
+    start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'port=8931' \
+        'local_pairing=true' 'local_pairing_address=127.0.0.1' 'local_pairing_port=8931'
+    container=$PLAYER
+    wait_for_exit "$container" "$EXIT_TIMEOUT_S" || {
+        show_logs "$container"
+        fail 'the same port for the player and the pairing token left the container running'
+    }
+    assert_exit_code "$container" 1 'the container exits 1 when two listeners are given one port'
+    assert_log "$container" 'SENDSPIN_PORT and SENDSPIN_LOCAL_PAIRING_PORT are both 8931' \
+        'the log names both, and why'
 }
 
 # The value Compose has and the add-on deliberately does not. Add-on mode is served it by the
@@ -2047,7 +2111,7 @@ check_identity_survives_recreation() {
 
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
         status_out=$(docker exec "$PLAYER" \
-            sendspin-cli status --control-socket /run/sendspin-cli/control.sock 2>/dev/null || true)
+            sendspin-cli status --control-socket /run/sendspin-cli/socket/control.sock 2>/dev/null || true)
         if grep -F -x -e 'trust: paired' <<<"$status_out" >/dev/null; then
             break
         fi
@@ -2217,6 +2281,7 @@ main() {
     check_output_names_that_changed_meaning
     check_output_names_that_did_not
     check_buffer_ms
+    check_port
     check_compose_only_options
     check_allow_unpaired
     check_input

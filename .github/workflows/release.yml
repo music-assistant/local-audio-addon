@@ -439,8 +439,8 @@ jobs:
       - name: Pin a compose file to the image that was published
         if: steps.existing.outputs.exists != 'true'
         run: |
-          scripts/compose_pinned.sh --image "$REPO:$VERSION" >"$RUNNER_TEMP/docker-compose.yml"
-          cat "$RUNNER_TEMP/docker-compose.yml"
+          scripts/compose_pinned.sh --image "$REPO:$VERSION" >"$RUNNER_TEMP/docker-compose.build.yml"
+          cat "$RUNNER_TEMP/docker-compose.build.yml"
 
       # `--verify-tag` so that a ref which is somehow not the tag this ran for fails rather than
       # having `gh` create a tag of its own. The title is the bare version, which is how the most
@@ -460,4 +460,4 @@ jobs:
             --verify-tag \
             --title "$VERSION" \
             --notes-file "$RUNNER_TEMP/release-notes.md" \
-            "$RUNNER_TEMP/docker-compose.yml"
+            "$RUNNER_TEMP/docker-compose.build.yml"

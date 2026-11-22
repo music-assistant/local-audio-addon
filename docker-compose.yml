@@ -1,123 +1,79 @@
+---
+# Standalone operation of the player outside the Home Assistant OS apps: a Linux host with Docker.
+# The player runs as a regular user, started by the s6-overlay of the image. It reads the same SENDSPIN_* variables
+# as docker-compose.build.yml, set them in the .env (see .env.example).
 services:
+  # Fix permissions for the state volume and the control socket directory, which are created owned by root
+  fix-permissions:
+    image: "${LOCAL_AUDIO_IMAGE:-ghcr.io/music-assistant/local-audio-addon}:${LOCAL_AUDIO_IMAGE_TAG:-latest}"
+    entrypoint: []
+    user: "0:0"
+    command: "chown -R ${LOCAL_AUDIO_USER_ID:-1000}:${LOCAL_AUDIO_USER_GROUP:-1000} /data ${SENDSPIN_SOCKET_DIR:-/run/sendspin-cli/socket}"
+    volumes:
+      - data:/data
+      - ${LOCAL_AUDIO_SOCKET_DIR:-/run/sendspin-cli/socket}:${SENDSPIN_SOCKET_DIR:-/run/sendspin-cli/socket}
+    restart: "no"
+
+  # Music Assistant Local Audio (Sendspin player)
+  # The image starts s6-overlay, which starts the player. As a regular user the bundled dbus and avahi-daemon do not
+  # start, but with the D-Bus socket of the host mounted (below) they are not needed: the player announces itself
+  # through the Avahi of the host, which has to run on the host.
   local-audio:
-    build: .
-    container_name: ma-local-audio
+    container_name: local-audio
+    image: "${LOCAL_AUDIO_IMAGE:-ghcr.io/music-assistant/local-audio-addon}:${LOCAL_AUDIO_IMAGE_TAG:-latest}"
     restart: unless-stopped
-    # Both halves of the player need the host's network namespace: mDNS to be
-    # discovered, and port 8928 for the server to connect back in on.
-    network_mode: host
+    # The player announces itself through the Avahi of the host over the D-Bus socket below. On hosts with AppArmor
+    # enabled (for example Ubuntu) the profile docker-default stops that ("could not register _sendspin._tcp").
+    security_opt:
+      - apparmor=unconfined
+    # mDNS discovery and the port 8928 that the server connects back to need the network of the host
+    network_mode: "host"
+    user: "${LOCAL_AUDIO_USER_ID:-1000}:${LOCAL_AUDIO_USER_GROUP:-1000}"
+    environment:
+      # The sound server of the host: its directory is mounted below at the same path, see LOCAL_AUDIO_PULSE_SERVER,
+      # LOCAL_AUDIO_PULSE_COOKIE and PIPEWIRE_REMOTE in the .env
+      - XDG_RUNTIME_DIR=${LOCAL_AUDIO_XDG_RUNTIME_DIR:-/run/user/${LOCAL_AUDIO_USER_ID:-1000}}
+      - PULSE_SERVER=${LOCAL_AUDIO_PULSE_SERVER:-unix:/run/user/${LOCAL_AUDIO_USER_ID:-1000}/pulse/native}
+      - PULSE_COOKIE=${LOCAL_AUDIO_PULSE_COOKIE:-/run/user/${LOCAL_AUDIO_USER_ID:-1000}/pulse/cookie}
+    # The SENDSPIN_* options of the player. An option that is not set keeps the default of the image.
+    env_file: ${ENV_FILE:-.env}
+    # ALSA devices, for SENDSPIN_OUTPUT=default or an ALSA device such as hw:1,0
     devices:
       - /dev/snd:/dev/snd
+    group_add:
+      - audio
+    # Priority for audio process
+    cap_add:
+      - SYS_NICE
     volumes:
-      - local-audio-data:/data
-      # Host-Avahi mode. Bind-mount the host's system bus and the container
-      # leaves its own dbus and avahi-daemon down, advertising through the
-      # host's Avahi instead. Use it when the host already runs Avahi, which two
-      # responders on port 5353 would otherwise fight with. Read-only is all a
-      # bus client needs.
-      # - /var/run/dbus:/var/run/dbus:ro
-      # Native PulseAudio output. Bind-mount the host's PulseAudio socket and
-      # set PULSE_SERVER below, then use `pulse` or `pulse:<sink>`. Reach for it
-      # when the host runs PulseAudio: `-l` can then name the server's sinks,
-      # the host's mixer sees a stream called sendspin-cli, and the sync figure
-      # is the server's rather than an ALSA plugin's own buffering. The 0700 on
-      # a per-user XDG_RUNTIME_DIR is not the obstacle it looks -- the daemon
-      # resolves the mount as root and this container runs as root -- but on
-      # Fedora or RHEL, SELinux is: add `:z` to the mount there. The cookie
-      # authenticates the client, and is unnecessary only where the socket is
-      # configured `auth-anonymous=1`.
-      # - /run/user/1000/pulse/native:/run/pulse/native
-      # - ${HOME}/.config/pulse/cookie:/root/.config/pulse/cookie:ro
-      # Native PipeWire output. The same shape, for a host running PipeWire; use
-      # `pipewire` or `pipewire:<node>`. It reaches the same server `pulse` does
-      # through pipewire-pulse; what it adds is that only a native client can
-      # name a *node*, and that nothing translates the audio path. It is the
-      # only route where pipewire-pulse is not installed. PIPEWIRE_REMOTE takes
-      # an absolute path; where that is ignored, mount the whole runtime
-      # directory instead and set XDG_RUNTIME_DIR to it.
-      # - /run/user/1000/pipewire-0:/run/pipewire-0
-    environment:
-      # Name shown in Music Assistant. Left unset every container is called
-      # `Local Audio`, so name them when running more than one on a network.
-      # SENDSPIN_NAME: Living Room
-      # `default` follows /etc/asound.conf, `pulse` and `pipewire` reach a sound
-      # server on the host through the native backends, a bare name that is none
-      # of those is an ALSA PCM such as `hw:1,0`, and `null` discards the audio.
-      # `docker exec ma-local-audio sendspin-cli -l` lists what this container
-      # can actually see, sound-server sinks and nodes included.
-      SENDSPIN_OUTPUT: default
-      # Paired with the socket mounts above, and read by the client libraries
-      # rather than by this image. PULSE_COOKIE goes with the cookie mount, and
-      # is left out where the server takes anonymous clients. The XDG_RUNTIME_DIR
-      # alternative to PIPEWIRE_REMOTE is in the mount comment above.
-      # PULSE_SERVER: unix:/run/pulse/native
-      # PULSE_COOKIE: /root/.config/pulse/cookie
-      # PIPEWIRE_REMOTE: /run/pipewire-0
-      # SENDSPIN_LOG_LEVEL: info
-      # How much audio the output keeps buffered, 10 to 2000 milliseconds. Left
-      # unset the player picks its own figure; raise it where the sound breaks
-      # up on a busy or slow machine, at the cost of a longer wait when a track
-      # starts or is seeked. Anything that is not a whole number in that range
-      # stops the container with a line naming it -- with the restart policy
-      # above, one that keeps retrying -- rather than reaching the player.
-      # SENDSPIN_BUFFER_MS: 250
-      # Move one format to the front of the list this player advertises, as
-      # <codec>:<rate>:<depth>:<channels> -- for the DAC that is only happy in
-      # one shape. A format the output cannot advertise stops the player from
-      # starting rather than quietly playing something else -- with the restart
-      # policy above, a container looping on the same refusal -- so set it only
-      # against a device whose capabilities `sendspin-cli -l` has confirmed.
-      # SENDSPIN_AUDIO_FORMAT: flac:48000:24:2
-      # These four act on an ALSA output only, and are ignored or refused for
-      # any other. Keep an HDMI or S/PDIF output playing silence this many
-      # seconds after a stream ends, 0 to 3600, for a receiver that clips the
-      # start of the next one while it re-locks.
-      # SENDSPIN_KEEP_OUTPUT_ALIVE: 10
-      # Close the device between streams, for a `hw:` DAC another player on
-      # the host also wants. Anything but true or false stops the container.
-      # SENDSPIN_RELEASE_DEVICE: "true"
-      # Drive this hardware mixer, as <card>:<control>, for volume and mute
-      # instead of scaling the audio. `sendspin-cli -l` and `amixer -c <card>
-      # scontrols` on the host name them. The curve is `spec` (the default) or
-      # `cubic`, which tracks alsamixer's slider. A mixer the player cannot
-      # open, or one without an ALSA output, stops it from starting.
-      # SENDSPIN_ALSA_MIXER: 0:Master
-      # SENDSPIN_ALSA_MIXER_CURVE: cubic
-      # A server has to pair with this player before it can play; the README's
-      # Pairing section covers how. `true` lets any server on the network play
-      # without pairing, and anything but true or false stops the container.
-      # SENDSPIN_ALLOW_UNPAIRED: "false"
-      # Stream a capture device to Music Assistant, which lists it under Live
-      # Inputs once paired. `sendspin-cli -l` lists what this container can
-      # capture, and `tone` is a test tone. A device that cannot be opened stops
-      # the container.
-      # SENDSPIN_INPUT: hw:1,0
-      # Serve the pairing token over HTTP on one address, so a Music Assistant
-      # that can reach it pairs by itself. Anything that can reach the address
-      # can pair, so name one only Music Assistant's host can reach; `true`
-      # with no address stops the container. The README's Pairing section.
-      # SENDSPIN_LOCAL_PAIRING: "false"
-      # SENDSPIN_LOCAL_PAIRING_ADDRESS: 192.0.2.1
-      # SENDSPIN_LOCAL_PAIRING_PORT: 8929
-      # Run a shell command when a stream starts and when it stops -- switching
-      # an amplifier relay on and off again is what these are for. The value is
-      # a command, not data: it is handed to `sh -c` inside the container and
-      # runs with whatever that container can reach. The event's facts arrive as
-      # SENDSPIN_EVENT (start|stop) and, where the server said so,
-      # SENDSPIN_SERVER_ID, SENDSPIN_SERVER_NAME, SENDSPIN_SERVER_URL,
-      # SENDSPIN_CLIENT_ID and SENDSPIN_CLIENT_NAME. Neither holds up playback,
-      # and a non-zero exit is a warning in the log rather than a player failure.
-      #
-      # To read one of those in the command itself, write it `$$SENDSPIN_EVENT`.
-      # A single `$` is expanded by `docker compose` before the container is
-      # ever started, so the hook would be handed an empty string; the doubled
-      # form is what reaches it. Neither example below has that problem, and a
-      # command that quietly did nothing would be a hard one to work out.
-      # SENDSPIN_HOOK_START: curl -fsS -X POST http://192.168.1.20/relay/0?turn=on
-      # SENDSPIN_HOOK_STOP: curl -fsS -X POST http://192.168.1.20/relay/0?turn=off
-      # Dial out to one specific server instead of waiting to be discovered.
-      # Any value here suppresses the mDNS advertisement.
-      # SENDSPIN_SERVER: 192.168.1.10:8927
+      # Identity, pairings and state
+      - data:/data
+      # Control socket of the player, as control.sock. The directory on the host is LOCAL_AUDIO_SOCKET_DIR, in the
+      # container it is SENDSPIN_SOCKET_DIR, where the player creates the socket. Only this directory is shared, the
+      # rendered configuration stays in the container. The directory is mounted, so that the socket is created again
+      # when the container restarts.
+      - ${LOCAL_AUDIO_SOCKET_DIR:-/run/sendspin-cli/socket}:${SENDSPIN_SOCKET_DIR:-/run/sendspin-cli/socket}
+      # Time and zone
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      # Pulseaudio
+      - ${LOCAL_AUDIO_XDG_RUNTIME_DIR:-/run/user/${LOCAL_AUDIO_USER_ID:-1000}}:${LOCAL_AUDIO_XDG_RUNTIME_DIR:-/run/user/${LOCAL_AUDIO_USER_ID:-1000}}
+      # Avahi of the host
+      - /var/run/dbus:/var/run/dbus:ro
+    depends_on:
+      fix-permissions:
+        condition: service_completed_successfully
+    # The image names the player `Local Audio` when SENDSPIN_NAME is not set. Here it is named after the host instead:
+    # with the network of the host the hostname in the container is the one of the host. Then the entrypoint of the
+    # image (/init, s6-overlay) takes over. The $$ is Compose escaping, the shell sees a single $.
+    entrypoint: ["/bin/sh", "-c", 'export SENDSPIN_NAME="$${SENDSPIN_NAME:-$$(hostname)}"; exec /init']
+    # Health check for process. It asks the player over its control socket in SENDSPIN_SOCKET_DIR, the path in the container.
+    healthcheck:
+      test: ["CMD", "sendspin-cli", "status", "--control-socket", "${SENDSPIN_SOCKET_DIR:-/run/sendspin-cli/socket}/control.sock"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
 volumes:
-  local-audio-data:
+  data:

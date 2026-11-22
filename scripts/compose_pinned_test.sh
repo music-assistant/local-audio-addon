@@ -5,7 +5,7 @@
 # The asset it prints is generated on a tag and downloaded by people who are not watching CI, so
 # a wrong one is quiet twice over: it is valid YAML that `docker compose up` accepts, and the
 # only symptom is a user compiling the player from source instead of pulling the image the
-# release published. These run on every pull request, against the real docker-compose.yml, so
+# release published. These run on every pull request, against the real docker-compose.build.yml, so
 # that a change to that file which leaves nothing to substitute is caught by the pull request
 # making it rather than by the next release.
 #
@@ -18,7 +18,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 readonly SCRIPT_DIR
 readonly PIN="$SCRIPT_DIR/compose_pinned.sh"
-readonly REAL_COMPOSE="$SCRIPT_DIR/../docker-compose.yml"
+readonly REAL_COMPOSE="$SCRIPT_DIR/../docker-compose.build.yml"
 readonly IMAGE=ghcr.io/music-assistant/local-audio-addon:0.1.8
 
 FAILURES=0
@@ -70,10 +70,10 @@ check_the_shipped_compose_file() {
     local pinned
     pinned="$(pinned_of "$REAL_COMPOSE")"
     if [ "$pinned" = error ]; then
-        fail 'the repository docker-compose.yml pins -- the rest of this section cannot run'
+        fail 'the repository docker-compose.build.yml pins -- the rest of this section cannot run'
         return
     fi
-    pass 'the repository docker-compose.yml pins'
+    pass 'the repository docker-compose.build.yml pins'
 
     # The indentation the replaced key sat at, put back. A flush-left `image:` would be a key on
     # the services mapping rather than on this service, and the file would not load at all.

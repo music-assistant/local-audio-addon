@@ -15,11 +15,82 @@ Discovery and playback are local-network only. There is no reverse-proxy,
 HTTPS or overlay-network story, and deployments other than Docker Compose and
 the Home Assistant app are not supported.
 
-## Quickstart with Docker Compose
+## Standalone Docker Compose project
+
+`docker-compose.yml` and `.env.example` in the root of this repository are a
+ready-to-use Compose project for the **standalone operation outside the Home
+Assistant OS apps**: a Linux host with Docker, next to Music Assistant. They are
+not meant for Home Assistant OS, which installs the app from `local_audio/`
+instead, see [Home Assistant app](#home-assistant-app).
 
 ```sh
+cp .env.example .env
 docker compose up -d
 docker compose logs -f
+```
+
+It pulls the published image (`ghcr.io/music-assistant/local-audio-addon`)
+instead of building it, and differs from the startup of the image described
+below in these ways:
+
+- **It does not run as root.** s6-overlay and the player run as the user and
+  group in `LOCAL_AUDIO_USER_ID` and `LOCAL_AUDIO_USER_GROUP` (1000 by default),
+  which must be allowed to use the audio socket of the host.
+- **It announces itself through the Avahi of the host.** The bundled `dbus` and
+  `avahi-daemon` need root and do not start as a regular user, so the D-Bus
+  socket of the host (`/var/run/dbus`, mounted read-only) is mounted and the
+  player reaches the Avahi of the host through it. Avahi has to run on the host.
+  Without one, set `SENDSPIN_SERVER` to dial out to a server instead. On hosts
+  with AppArmor enabled (for example Ubuntu) the profile `docker-default` keeps
+  the player from registering with Avahi (the log says `could not register
+  _sendspin._tcp`), so the compose file sets `security_opt:
+  apparmor=unconfined`, which removes the AppArmor protection of that container.
+- **It is named after the host.** Unless `SENDSPIN_NAME` is set, the name in
+  Music Assistant is the hostname, where the image alone would call every player
+  `Local Audio`. An entrypoint sets it before s6-overlay of the image takes over.
+- **The options are the `SENDSPIN_*` variables** of the table below, set in the
+  `.env`, exactly as in `docker-compose.build.yml`, and so are the variables of
+  the sound server that its client libraries read (`PIPEWIRE_REMOTE`).
+  `.env.example` lists them with their descriptions. The settings of the project
+  itself have their own names (`LOCAL_AUDIO_*`): the image and its tag, the
+  directory of the control socket on the host (`LOCAL_AUDIO_SOCKET_DIR`), the
+  user, and the sound server of the host: `LOCAL_AUDIO_XDG_RUNTIME_DIR`, its directory, which is mounted at the
+  same path, `LOCAL_AUDIO_PULSE_SERVER`, its address, and
+  `LOCAL_AUDIO_PULSE_COOKIE`, its cookie.
+- **The control socket is on the host.** The directory `LOCAL_AUDIO_SOCKET_DIR`
+  on the host (default `/run/sendspin-cli/socket`) is mounted into the container
+  at `SENDSPIN_SOCKET_DIR` (default `/run/sendspin-cli/socket`), where the player
+  creates `control.sock`. So `control.sock` is in that directory on the host
+  (mode `0600`, owned by the user above). The rendered configuration is not in
+  it, it stays in `/run/sendspin-cli` of the container. Programs on the host
+  running as the same user can talk to the player through the socket; `docker
+  compose exec local-audio sh -c 'sendspin-cli status --control-socket
+  "$SENDSPIN_SOCKET_DIR/control.sock"'` shows what the player reports (with the
+  default directory, the path is `/run/sendspin-cli/socket/control.sock`). The
+  directory, not the socket, is mounted, so that the socket is created again
+  when the container restarts.
+- **One player per port.** The player listens on port 8928 unless `SENDSPIN_PORT`
+  is set, so a second player on the same host needs its own port, its own `/data`
+  volume (a different Compose project has one) and its own directory of the
+  control socket (`LOCAL_AUDIO_SOCKET_DIR`).
+
+A server has to pair with the player before it can play, see
+[Pairing](#pairing). `.env.example` sets `SENDSPIN_ALLOW_UNPAIRED` to `true` for
+now, so that a server can play without pairing: anyone on the network can play
+then, and removing that line requires the pairing again. The control socket is
+only reachable on the host. In the
+Home Assistant app it is in the config folder of the app, see
+[Control socket](#control-socket).
+
+## Quickstart with Docker Compose
+
+To build the image from source and run it with the startup of the image,
+including the bundled `dbus` and `avahi-daemon` and the `SENDSPIN_*` variables,
+use `docker-compose.build.yml`:
+
+```sh
+docker compose -f docker-compose.build.yml up -d
+docker compose -f docker-compose.build.yml logs -f
 ```
 
 Music Assistant discovers the player over mDNS and connects back in on port
@@ -33,7 +104,7 @@ I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspi
 the player is waiting to be picked up in Music Assistant's Sendspin provider,
 which then has to pair with it before it can play — see [Pairing](#pairing).
 
-This image's own configuration is seventeen environment variables, all optional:
+This image's own configuration is eighteen environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -42,6 +113,8 @@ This image's own configuration is seventeen environment variables, all optional:
 | `SENDSPIN_LOG_LEVEL` | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
 | `SENDSPIN_SERVER` | unset | Dial out to one server instead of being discovered |
 | `SENDSPIN_BUFFER_MS` | unset (the player uses 100) | How much audio the output keeps buffered, `10`–`2000` |
+| `SENDSPIN_PORT` | unset (the player uses `8928`) | The port the player listens on, `1024`–`65535` |
+| `SENDSPIN_SOCKET_DIR` | `/run/sendspin-cli/socket` | Directory in the container where the player creates `control.sock`, Compose only. The Home Assistant app keeps the default |
 | `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
 | `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
 | `SENDSPIN_ALLOW_UNPAIRED` | `false` | `true` lets any server play without pairing |
@@ -92,7 +165,7 @@ What the event was arrives in the environment:
 
 Anything unknown for an event is unset rather than empty, so `[ -n "$SENDSPIN_SERVER_ID" ]`
 means what it looks like. To read one of them inside a command written in
-`docker-compose.yml`, double the dollar — `$$SENDSPIN_EVENT`. A single `$` is
+`docker-compose.build.yml`, double the dollar — `$$SENDSPIN_EVENT`. A single `$` is
 expanded by `docker compose` itself before the container starts, so the hook is
 handed an empty string, and a command that quietly does nothing is a hard fault to
 track down. The Home Assistant app offers the same two as
@@ -108,7 +181,7 @@ It moves that format to the front of the list this player advertises, so a
 server encodes to it in preference to anything else; everything the device takes
 is still offered behind it. The sharp edge is that a format the output cannot
 advertise is a refusal to start rather than a fallback, and under the shipped
-`docker-compose.yml`'s `restart: unless-stopped` that is a container looping on
+`docker-compose.build.yml`'s `restart: unless-stopped` that is a container looping on
 the same refusal. The player advertises stereo formats only for now, so the
 channel count must be `2`, even where `sendspin-cli -l` lists more for the
 device: `-l` reports what the device takes, not what the player offers. Pick
@@ -143,8 +216,10 @@ the player anyway, with one line in the log saying the value is ignored.
 To run two of these on one machine, give each container its own `/data` volume,
 which is what gives each its own keypair. Two players sharing one volume share
 one identity, and every server-side setting lands on whichever connected last.
-Both also need `network_mode: host` and port 8928, so in practice the second one
-belongs on another machine.
+Both also need `network_mode: host`, so the second one needs its own
+`SENDSPIN_PORT` (the default is 8928). The bundled `avahi-daemon` of a second
+container would be another responder on port 5353, so give the second player the
+Avahi of the host instead, see [Discovery, Avahi and D-Bus](#discovery-avahi-and-d-bus).
 
 The two sound-server backends also read the environment their own client
 libraries define — `PULSE_SERVER`, `PULSE_COOKIE` and `PIPEWIRE_REMOTE` — which
@@ -165,11 +240,12 @@ There are three ways in:
 
   ```sh
   docker compose exec local-audio sendspin-cli pair-token \
-      --control-socket /run/sendspin-cli/control.sock
+      --control-socket /run/sendspin-cli/socket/control.sock
   ```
 
   The socket has to be named: the container sets no `$XDG_RUNTIME_DIR` for the
-  player's default to be found under, and `status` and `pair` need it too.
+  player's default to be found under, and `status` and `pair` need it too. The
+  path is `$SENDSPIN_SOCKET_DIR/control.sock`, as above with the default directory.
 
   While nothing is paired the player also logs it once at startup, on a line
   that starts `No server is paired yet. Pairing token`.
@@ -254,7 +330,7 @@ covers what that looks like in a log and how long it keeps trying.
 
 Bind-mount the host's PulseAudio socket, point `PULSE_SERVER` at where it landed
 and set `SENDSPIN_OUTPUT` to `pulse`, or to `pulse:<sink>` for a specific one;
-`docker-compose.yml` carries the mount and the environment commented out. A bare
+`docker-compose.build.yml` carries the mount and the environment commented out. A bare
 `pulse` follows whichever sink the server calls default, resolved afresh at every
 stream.
 
@@ -358,7 +434,7 @@ passing the matching digest, which is what CI does per architecture. A plain
 
 `local_audio/` is the app manifest, wrapping this same image, so the runtime
 behaviour described above is shared. It reads its `name`, `log_level`, `input`,
-`input_source`, `input_card_profile`, `server`, `buffer_ms`, `allow_unpaired`,
+`input_source`, `input_card_profile`, `server`, `buffer_ms`, `port`, `allow_unpaired`,
 `local_pairing`, `local_pairing_port`, `hook_start` and `hook_stop` from the app
 options instead of the environment.
 
@@ -507,6 +583,19 @@ The next stream re-resolves the device name and opens it afresh, which is its
 own recovery — so a log ending on that warning means the output never came back
 inside the minute, not that the player stopped trying for good.
 
+### Control socket
+
+The player's control socket, `/run/sendspin-cli/socket/control.sock` in the container, is
+reachable from outside it. The manifest maps the config folder of this app over
+`/run/sendspin-cli/socket` (`map`, type `app_config`, writable), so `control.sock`
+is in the folder of this app on the host, and an app that maps `all_app_configs`
+finds it there. It is what another program uses to control the player, for
+example to lower its volume while a voice assistant talks. Only the socket is in
+that folder: the rendered `sendspin-cli.conf` (mode 0600), which can carry the
+credentials of a `server`, stays in `/run/sendspin-cli` of the container. The
+pairing token is never written to a file. The path in the container is the one
+the image always uses.
+
 ## Cutting a release
 
 The version is bumped by the pull request that makes the change, not at release
@@ -551,7 +640,7 @@ remember, and a tag whose version has no changelog section fails the job instead
 of publishing an empty body. A release wanting more than the sections say is
 still edited by hand afterwards.
 
-Attached to it is a `docker-compose.yml` pinned to the released image, which
+Attached to it is a `docker-compose.build.yml` pinned to the released image, which
 `scripts/compose_pinned.sh` generates from the one in this repository by
 replacing `build: .` with the image that was published. It is generated rather
 than kept as a second copy so the two cannot drift, and it is never committed.
@@ -614,7 +703,7 @@ look like an idle instance. To query it by hand:
 
 ```sh
 docker exec ma-local-audio sendspin-cli status \
-    --control-socket /run/sendspin-cli/control.sock
+    --control-socket /run/sendspin-cli/socket/control.sock
 ```
 
 The Home Assistant Supervisor ignores `HEALTHCHECK`, so this is for the Compose

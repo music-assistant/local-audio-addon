@@ -25,6 +25,18 @@ host_network: true
 # gives this app its own Audio selector, which is how a user points it at a USB
 # DAC.
 audio: true
+# The config folder of this app, mapped over /run/sendspin-cli/socket, where the player keeps its
+# control socket (control.sock). The socket is then in the folder of this app on the host instead
+# of in the container alone, and an app that maps `all_app_configs` can reach it. The path in the
+# container is the one the image always uses, so nothing in the image changes. Writable because
+# the player creates the socket in it. Only the socket directory is shared: the rendered
+# `sendspin-cli.conf` (mode 0600), which can carry the credentials of a `server`, stays in
+# /run/sendspin-cli of the container. `app_config` is the name since add-ons became apps; older
+# Supervisors know it as `addon_config`.
+map:
+  - type: app_config
+    read_only: false
+    path: /run/sendspin-cli/socket
 options:
   # Empty rather than absent, so the configuration screen shows the field
   # instead of folding it away as unused. An empty name is the default,
@@ -34,13 +46,15 @@ options:
   # Quoted because a bare `off` is a YAML boolean, which the list below refuses.
   input: "off"
   local_pairing: true
-# `server`, `buffer_ms`, `allow_unpaired`, `local_pairing_port` and the two
+# `server`, `buffer_ms`, `port`, `allow_unpaired`, `local_pairing_port` and the two
 # hooks are optional with no default on purpose, which is what keeps them out of
 # `options:` above and so behind the fold a user has to open deliberately. Setting a `server` switches the
 # player to dialling out, which suppresses its mDNS advertisement. An unset
 # `buffer_ms` has to reach the player as no setting at all rather than as a number written here,
 # so that the default stays upstream's to change; the range is upstream's own, so
-# the configuration screen refuses what the player would refuse.
+# the configuration screen refuses what the player would refuse. The same goes for `port`, whose
+# default is the player's 8928, and whose range is the one of the pairing port: below 1024 only
+# root may listen.
 #
 # `hook_start` and `hook_stop` are `str?` because a shell command is what they
 # are: there is no narrower schema that would describe one, and no validation
@@ -60,6 +74,7 @@ schema:
   input_card_profile: match(^[A-Za-z0-9_.-]+:.+$)?
   server: str?
   buffer_ms: int(10,2000)?
+  port: int(1024,65535)?
   allow_unpaired: bool?
   local_pairing: bool
   local_pairing_port: int(1024,65535)?
