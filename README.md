@@ -67,13 +67,18 @@ below in these ways:
   /run/sendspin-cli/control.sock` shows what the player reports. The directory,
   not the socket, is mounted, so that the socket is created again when the
   container restarts.
-- **One player per host.** The player listens on port 8928, which is not an
-  option, so a second player on the same host needs a different network
-  namespace.
+- **One player per port.** The player listens on port 8928 unless `SENDSPIN_PORT`
+  is set, so a second player on the same host needs its own port, its own `/data`
+  volume (a different Compose project has one) and its own directory of the
+  control socket (`LOCAL_AUDIO_CONTROL_DIR`).
 
 A server has to pair with the player before it can play, see
-[Pairing](#pairing). The control socket is only reachable on the host: the Home
-Assistant app does not make it available outside its container.
+[Pairing](#pairing). `.env.example` sets `SENDSPIN_ALLOW_UNPAIRED` to `true` for
+now, so that a server can play without pairing: anyone on the network can play
+then, and removing that line requires the pairing again. The control socket is
+only reachable on the host. In the
+Home Assistant app it is in the config folder of the app, see
+[Control socket](#control-socket).
 
 ## Quickstart with Docker Compose
 
@@ -97,7 +102,7 @@ I mdns: advertising _sendspin._tcp. as "Living Room" on port 8928 (path /sendspi
 the player is waiting to be picked up in Music Assistant's Sendspin provider,
 which then has to pair with it before it can play — see [Pairing](#pairing).
 
-This image's own configuration is seventeen environment variables, all optional:
+This image's own configuration is eighteen environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -106,6 +111,7 @@ This image's own configuration is seventeen environment variables, all optional:
 | `SENDSPIN_LOG_LEVEL` | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
 | `SENDSPIN_SERVER` | unset | Dial out to one server instead of being discovered |
 | `SENDSPIN_BUFFER_MS` | unset (the player uses 100) | How much audio the output keeps buffered, `10`–`2000` |
+| `SENDSPIN_PORT` | unset (the player uses `8928`) | The port the player listens on, `1024`–`65535`, Compose only |
 | `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
 | `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
 | `SENDSPIN_ALLOW_UNPAIRED` | `false` | `true` lets any server play without pairing |
@@ -207,8 +213,10 @@ the player anyway, with one line in the log saying the value is ignored.
 To run two of these on one machine, give each container its own `/data` volume,
 which is what gives each its own keypair. Two players sharing one volume share
 one identity, and every server-side setting lands on whichever connected last.
-Both also need `network_mode: host` and port 8928, so in practice the second one
-belongs on another machine.
+Both also need `network_mode: host`, so the second one needs its own
+`SENDSPIN_PORT` (the default is 8928). The bundled `avahi-daemon` of a second
+container would be another responder on port 5353, so give the second player the
+Avahi of the host instead, see [Discovery, Avahi and D-Bus](#discovery-avahi-and-d-bus).
 
 The two sound-server backends also read the environment their own client
 libraries define — `PULSE_SERVER`, `PULSE_COOKIE` and `PIPEWIRE_REMOTE` — which
@@ -570,6 +578,18 @@ alsa: 'default' is not back -- discarding until the next stream
 The next stream re-resolves the device name and opens it afresh, which is its
 own recovery — so a log ending on that warning means the output never came back
 inside the minute, not that the player stopped trying for good.
+
+### Control socket
+
+The player's control socket, `/run/sendspin-cli/control.sock` in the container, is
+reachable from outside it. The manifest maps the config folder of this app over
+`/run/sendspin-cli` (`map`, type `app_config`, writable), so `control.sock` is in
+the folder of this app on the host, and an app that maps `all_app_configs` finds
+it there. It is what another program uses to control the player, for example to
+lower its volume while a voice assistant talks. The rendered `sendspin-cli.conf`
+(mode 0600) is in the same folder, and it can carry the credentials of a
+`server`, so give the folder only to apps you trust. The pairing token is never
+written to a file. The path in the container is the one the image always uses.
 
 ## Cutting a release
 

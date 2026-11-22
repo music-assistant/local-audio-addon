@@ -52,6 +52,9 @@ install -m 600 /dev/null "${SENDSPIN_CONF}"
     if [ -n "${SENDSPIN_BUFFER_MS}" ]; then
         printf 'buffer-ms = %s\n' "${SENDSPIN_BUFFER_MS}"
     fi
+    if [ -n "${SENDSPIN_PORT}" ]; then
+        printf 'port = %s\n' "$((10#${SENDSPIN_PORT}))"
+    fi
     if [ -n "${SENDSPIN_AUDIO_FORMAT}" ]; then
         printf 'audio-format = %s\n' "${SENDSPIN_AUDIO_FORMAT}"
     fi

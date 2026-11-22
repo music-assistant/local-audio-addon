@@ -264,6 +264,14 @@ in its log, rather than retrying forever. Nothing is stuck: the next track opens
 the output afresh, so playing something new is the way back once whatever went
 missing is there again.
 
+## Controlling the player from another program
+
+The player's control socket, `control.sock`, is in the config folder of this app.
+A program that controls the player through it, for example a voice assistant that
+lowers the volume while it talks, finds it there. The same folder holds the file
+the player is started with, which carries the login of the **Music Assistant
+server** you set, if it has one, so only give the folder to apps you trust.
+
 ## Known rough edges
 
 This app is **experimental**. It works, but it has not been through wide testing

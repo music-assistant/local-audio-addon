@@ -61,6 +61,9 @@ services:
       # stops the container with a line naming it -- with the restart policy
       # above, one that keeps retrying -- rather than reaching the player.
       # SENDSPIN_BUFFER_MS: 250
+      # The port the player listens on and the server connects back to, 1024 to 65535. Left unset the
+      # player uses 8928. A second player on the same host needs its own port, and its own /data volume.
+      # SENDSPIN_PORT: 8928
       # Move one format to the front of the list this player advertises, as
       # <codec>:<rate>:<depth>:<channels> -- for the DAC that is only happy in
       # one shape. A format the output cannot advertise stops the player from

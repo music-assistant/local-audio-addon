@@ -102,6 +102,12 @@ sendspin::read_options() {
     # this repo's to keep in step with upstream's for good.
     SENDSPIN_BUFFER_MS="${SENDSPIN_BUFFER_MS:-}"
 
+    # Left empty for the same reason: the run script writes `port` only when it has a
+    # value, so the player's own default (8928) stands. Not an add-on option: the app
+    # shares the host's network with a fixed port, and the add-on's schema has no field
+    # for it.
+    SENDSPIN_PORT="${SENDSPIN_PORT:-}"
+
     # Read from the environment in both branches because it is not an add-on
     # option. A pinned `audio-format` the output cannot advertise refuses to
     # start the player, and the add-on plays through Home Assistant's
@@ -142,7 +148,7 @@ sendspin::read_options() {
     # values are shell commands by design, so there is nothing to sanitise
     # within a line: whoever may set an option may already run what they like.
     for name in SENDSPIN_NAME SENDSPIN_OUTPUT SENDSPIN_LOG_LEVEL SENDSPIN_SERVER \
-        SENDSPIN_BUFFER_MS SENDSPIN_AUDIO_FORMAT SENDSPIN_ALLOW_UNPAIRED SENDSPIN_INPUT \
+        SENDSPIN_BUFFER_MS SENDSPIN_PORT SENDSPIN_AUDIO_FORMAT SENDSPIN_ALLOW_UNPAIRED SENDSPIN_INPUT \
         SENDSPIN_INPUT_CARD_PROFILE SENDSPIN_HOOK_START SENDSPIN_HOOK_STOP SENDSPIN_LOCAL_PAIRING \
         SENDSPIN_LOCAL_PAIRING_ADDRESS SENDSPIN_LOCAL_PAIRING_PORT \
         SENDSPIN_KEEP_OUTPUT_ALIVE SENDSPIN_RELEASE_DEVICE SENDSPIN_ALSA_MIXER \
@@ -245,6 +251,31 @@ sendspin::read_options() {
         || [ "$((10#${SENDSPIN_LOCAL_PAIRING_PORT}))" -gt 65535 ]; then
         sendspin::log "SENDSPIN_LOCAL_PAIRING_PORT is ${SENDSPIN_LOCAL_PAIRING_PORT}, outside 1024 to 65535."
         exit 1
+    fi
+
+    # The player's own port: the same shape and range as the pairing port above, for the
+    # same reasons (the 64-bit wrap guard, `10#` against a leading zero read as octal).
+    # Below 1024 only root may listen, and this image does not always run as root.
+    if [ -n "${SENDSPIN_PORT}" ]; then
+        case ${SENDSPIN_PORT} in
+            *[!0-9]*)
+                sendspin::log "SENDSPIN_PORT is \"${SENDSPIN_PORT}\", which is not a port number."
+                exit 1
+                ;;
+        esac
+        if [ "${#SENDSPIN_PORT}" -gt 5 ] \
+            || [ "$((10#${SENDSPIN_PORT}))" -lt 1024 ] \
+            || [ "$((10#${SENDSPIN_PORT}))" -gt 65535 ]; then
+            sendspin::log "SENDSPIN_PORT is ${SENDSPIN_PORT}, outside 1024 to 65535."
+            exit 1
+        fi
+
+        # Two listeners cannot share a port: the pairing token endpoint is served on its own.
+        if [ "${SENDSPIN_LOCAL_PAIRING}" = true ] \
+            && [ "$((10#${SENDSPIN_PORT}))" -eq "$((10#${SENDSPIN_LOCAL_PAIRING_PORT}))" ]; then
+            sendspin::log "SENDSPIN_PORT and SENDSPIN_LOCAL_PAIRING_PORT are both ${SENDSPIN_PORT}, but they are two listeners."
+            exit 1
+        fi
     fi
 
     if [ "${SENDSPIN_LOCAL_PAIRING}" = true ] && [ -z "${SENDSPIN_LOCAL_PAIRING_ADDRESS}" ]; then
