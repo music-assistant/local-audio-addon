@@ -55,6 +55,7 @@ sendspin::read_options() {
         SENDSPIN_LOG_LEVEL=$(sendspin::option "${config}" 'log_level')
         SENDSPIN_SERVER=$(sendspin::option "${config}" 'server')
         SENDSPIN_BUFFER_MS=$(sendspin::option "${config}" 'buffer_ms')
+        SENDSPIN_PORT=$(sendspin::option "${config}" 'port')
         # A JSON false reads as empty here, which is the same as unset.
         SENDSPIN_ALLOW_UNPAIRED=$(sendspin::option "${config}" 'allow_unpaired')
         SENDSPIN_HOOK_START=$(sendspin::option "${config}" 'hook_start')
@@ -103,9 +104,8 @@ sendspin::read_options() {
     SENDSPIN_BUFFER_MS="${SENDSPIN_BUFFER_MS:-}"
 
     # Left empty for the same reason: the run script writes `port` only when it has a
-    # value, so the player's own default (8928) stands. Not an add-on option: the app
-    # shares the host's network with a fixed port, and the add-on's schema has no field
-    # for it.
+    # value, so the player's own default (8928) stands. The add-on's `port` option arrives
+    # above; under Compose it is the environment variable.
     SENDSPIN_PORT="${SENDSPIN_PORT:-}"
 
     # Read from the environment in both branches because it is not an add-on
@@ -253,9 +253,10 @@ sendspin::read_options() {
         exit 1
     fi
 
-    # The player's own port: the same shape and range as the pairing port above, for the
-    # same reasons (the 64-bit wrap guard, `10#` against a leading zero read as octal).
-    # Below 1024 only root may listen, and this image does not always run as root.
+    # The player's own port: the same range as the add-on's `port` schema, and the same shape
+    # and reasons as the pairing port above (the 64-bit wrap guard, `10#` against a leading
+    # zero read as octal). Below 1024 only root may listen, and this image does not always
+    # run as root.
     if [ -n "${SENDSPIN_PORT}" ]; then
         case ${SENDSPIN_PORT} in
             *[!0-9]*)

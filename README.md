@@ -111,7 +111,7 @@ This image's own configuration is eighteen environment variables, all optional:
 | `SENDSPIN_LOG_LEVEL` | `info` | `none`, `error`, `warn`, `info`, `debug`, `verbose` |
 | `SENDSPIN_SERVER` | unset | Dial out to one server instead of being discovered |
 | `SENDSPIN_BUFFER_MS` | unset (the player uses 100) | How much audio the output keeps buffered, `10`–`2000` |
-| `SENDSPIN_PORT` | unset (the player uses `8928`) | The port the player listens on, `1024`–`65535`, Compose only |
+| `SENDSPIN_PORT` | unset (the player uses `8928`) | The port the player listens on, `1024`–`65535` |
 | `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
 | `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
 | `SENDSPIN_ALLOW_UNPAIRED` | `false` | `true` lets any server play without pairing |
@@ -430,7 +430,7 @@ passing the matching digest, which is what CI does per architecture. A plain
 
 `local_audio/` is the app manifest, wrapping this same image, so the runtime
 behaviour described above is shared. It reads its `name`, `log_level`, `input`,
-`input_source`, `input_card_profile`, `server`, `buffer_ms`, `allow_unpaired`,
+`input_source`, `input_card_profile`, `server`, `buffer_ms`, `port`, `allow_unpaired`,
 `local_pairing`, `local_pairing_port`, `hook_start` and `hook_stop` from the app
 options instead of the environment.
 

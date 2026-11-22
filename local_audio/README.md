@@ -162,6 +162,13 @@ through a proxy.
 Do not put credentials in this field. It is shown as plain text on the
 configuration page and is included in Home Assistant backups.
 
+## Choosing the port
+
+The player listens on port 8928, and the server connects back to it there. If
+something else on this machine already uses that port, for example another
+player, set **Port** to another one between 1024 and 65535 and leave it empty
+otherwise.
+
 ## If the sound breaks up
 
 **Audio buffer** is how much audio the player keeps queued up, in milliseconds.

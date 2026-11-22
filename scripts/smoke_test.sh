@@ -776,7 +776,7 @@ start_player() {
     # stronger statement about the split than never offering it would be.
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
-            "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" \
+            "server=$server" "buffer_ms=$buffer_ms" "port=$port" "audio_format=$audio_format" \
             "allow_unpaired=$allow_unpaired" "input=$input" "input_source=$input_source" \
             "input_card_profile=$input_card_profile" \
             "hook_start=$hook_start" "hook_stop=$hook_stop" \
@@ -1459,15 +1459,15 @@ check_buffer_ms() {
     done
 }
 
-# The player's own port, which Compose can set and the add-on cannot: the app shares the host's
-# network with a fixed port. So this is standalone only, and the refusals are the shape and the
-# range the pairing port is held to, plus the one thing two listeners cannot do, which is share a
-# port. The player has to come up on the port it was given, and not merely have it rendered:
-# `port` is a key the image writes and the player reads, and only the log shows the second half.
+# The player's own port, set by an environment variable under Compose and by the `port` option in
+# the add-on. The refusals are the shape and the range the pairing port is held to, plus the one
+# thing two listeners cannot do, which is share a port. The add-on's schema refuses a bad value
+# before it arrives, which the stand-in Supervisor does not, so it is the shared read that is
+# under test in both modes. The player has to come up on the port it was given, and not merely
+# have it rendered: `port` is a key the image writes and the player reads, and only the log shows
+# the second half.
 check_port() {
     local container case value message
-
-    [ "$MODE" = standalone ] || return 0
 
     step 'a configured port'
     start_player 'output=null' "log_level=$PLAYER_LOG_LEVEL" 'port=18928'
