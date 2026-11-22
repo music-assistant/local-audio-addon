@@ -635,10 +635,9 @@ remember, and a tag whose version has no changelog section fails the job instead
 of publishing an empty body. A release wanting more than the sections say is
 still edited by hand afterwards.
 
-Attached to it is a `docker-compose.yml` pinned to the released image, which
-`scripts/compose_pinned.sh` generates from `docker-compose.build.yml` in this
-repository by replacing `build: .` with the image that was published. It is not
-the `docker-compose.yml` of the standalone project above. It is generated rather
+Attached to it is a `docker-compose.build.yml` pinned to the released image, which
+`scripts/compose_pinned.sh` generates from the one in this repository by
+replacing `build: .` with the image that was published. It is generated rather
 than kept as a second copy so the two cannot drift, and it is never committed.
 
 Once the whole workflow succeeds — the Release included —
