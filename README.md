@@ -53,24 +53,26 @@ below in these ways:
   the sound server that its client libraries read (`PIPEWIRE_REMOTE`).
   `.env.example` lists them with their descriptions. The settings of the project
   itself have their own names (`LOCAL_AUDIO_*`): the image and its tag, the
-  directory of the control socket on the host, the user, and the sound server of
-  the host: `LOCAL_AUDIO_XDG_RUNTIME_DIR`, its directory, which is mounted at the
+  directory of the control socket on the host (`LOCAL_AUDIO_SOCKET_DIR`), the
+  user, and the sound server of the host: `LOCAL_AUDIO_XDG_RUNTIME_DIR`, its directory, which is mounted at the
   same path, `LOCAL_AUDIO_PULSE_SERVER`, its address, and
   `LOCAL_AUDIO_PULSE_COOKIE`, its cookie.
-- **The control socket is on the host.** The directory `/run/sendspin-cli`, where
-  the image keeps its control socket and the rendered configuration, is mounted
-  from `LOCAL_AUDIO_CONTROL_DIR` on the host (default `/run/sendspin-cli`), so
-  `control.sock` is in that directory (mode `0600`, owned by the user above).
-  The path in the container is fixed by the image. Programs on the host running
-  as the same user can talk to the player through the socket; `docker compose
-  exec local-audio sendspin-cli status --control-socket
-  /run/sendspin-cli/control.sock` shows what the player reports. The directory,
-  not the socket, is mounted, so that the socket is created again when the
-  container restarts.
+- **The control socket is on the host.** The directory `LOCAL_AUDIO_SOCKET_DIR`
+  on the host (default `/run/sendspin-cli/socket`) is mounted into the container
+  at `SENDSPIN_SOCKET_DIR` (default `/run/sendspin-cli/socket`), where the player
+  creates `control.sock`. So `control.sock` is in that directory on the host
+  (mode `0600`, owned by the user above). The rendered configuration is not in
+  it, it stays in `/run/sendspin-cli` of the container. Programs on the host
+  running as the same user can talk to the player through the socket; `docker
+  compose exec local-audio sh -c 'sendspin-cli status --control-socket
+  "$SENDSPIN_SOCKET_DIR/control.sock"'` shows what the player reports (with the
+  default directory, the path is `/run/sendspin-cli/socket/control.sock`). The
+  directory, not the socket, is mounted, so that the socket is created again
+  when the container restarts.
 - **One player per port.** The player listens on port 8928 unless `SENDSPIN_PORT`
   is set, so a second player on the same host needs its own port, its own `/data`
   volume (a different Compose project has one) and its own directory of the
-  control socket (`LOCAL_AUDIO_CONTROL_DIR`).
+  control socket (`LOCAL_AUDIO_SOCKET_DIR`).
 
 A server has to pair with the player before it can play, see
 [Pairing](#pairing). `.env.example` sets `SENDSPIN_ALLOW_UNPAIRED` to `true` for
@@ -112,6 +114,7 @@ This image's own configuration is eighteen environment variables, all optional:
 | `SENDSPIN_SERVER` | unset | Dial out to one server instead of being discovered |
 | `SENDSPIN_BUFFER_MS` | unset (the player uses 100) | How much audio the output keeps buffered, `10`–`2000` |
 | `SENDSPIN_PORT` | unset (the player uses `8928`) | The port the player listens on, `1024`–`65535` |
+| `SENDSPIN_SOCKET_DIR` | `/run/sendspin-cli/socket` | Directory in the container where the player creates `control.sock`, Compose only. The Home Assistant app keeps the default |
 | `SENDSPIN_HOOK_START` | unset | A command run when a stream starts |
 | `SENDSPIN_HOOK_STOP` | unset | A command run when a stream stops |
 | `SENDSPIN_ALLOW_UNPAIRED` | `false` | `true` lets any server play without pairing |
@@ -237,11 +240,12 @@ There are three ways in:
 
   ```sh
   docker compose exec local-audio sendspin-cli pair-token \
-      --control-socket /run/sendspin-cli/control.sock
+      --control-socket /run/sendspin-cli/socket/control.sock
   ```
 
   The socket has to be named: the container sets no `$XDG_RUNTIME_DIR` for the
-  player's default to be found under, and `status` and `pair` need it too.
+  player's default to be found under, and `status` and `pair` need it too. The
+  path is `$SENDSPIN_SOCKET_DIR/control.sock`, as above with the default directory.
 
   While nothing is paired the player also logs it once at startup, on a line
   that starts `No server is paired yet. Pairing token`.
@@ -581,15 +585,16 @@ inside the minute, not that the player stopped trying for good.
 
 ### Control socket
 
-The player's control socket, `/run/sendspin-cli/control.sock` in the container, is
+The player's control socket, `/run/sendspin-cli/socket/control.sock` in the container, is
 reachable from outside it. The manifest maps the config folder of this app over
-`/run/sendspin-cli` (`map`, type `app_config`, writable), so `control.sock` is in
-the folder of this app on the host, and an app that maps `all_app_configs` finds
-it there. It is what another program uses to control the player, for example to
-lower its volume while a voice assistant talks. The rendered `sendspin-cli.conf`
-(mode 0600) is in the same folder, and it can carry the credentials of a
-`server`, so give the folder only to apps you trust. The pairing token is never
-written to a file. The path in the container is the one the image always uses.
+`/run/sendspin-cli/socket` (`map`, type `app_config`, writable), so `control.sock`
+is in the folder of this app on the host, and an app that maps `all_app_configs`
+finds it there. It is what another program uses to control the player, for
+example to lower its volume while a voice assistant talks. Only the socket is in
+that folder: the rendered `sendspin-cli.conf` (mode 0600), which can carry the
+credentials of a `server`, stays in `/run/sendspin-cli` of the container. The
+pairing token is never written to a file. The path in the container is the one
+the image always uses.
 
 ## Cutting a release
 
@@ -698,7 +703,7 @@ look like an idle instance. To query it by hand:
 
 ```sh
 docker exec ma-local-audio sendspin-cli status \
-    --control-socket /run/sendspin-cli/control.sock
+    --control-socket /run/sendspin-cli/socket/control.sock
 ```
 
 The Home Assistant Supervisor ignores `HEALTHCHECK`, so this is for the Compose

@@ -5,7 +5,8 @@
 readonly SENDSPIN_RUN_DIR=/run/sendspin-cli
 readonly SENDSPIN_CONF=/run/sendspin-cli/sendspin-cli.conf
 readonly SENDSPIN_STATE_DIR=/data/state
-readonly SENDSPIN_CONTROL_SOCKET=/run/sendspin-cli/control.sock
+readonly SENDSPIN_SOCKET_DIR="${SENDSPIN_SOCKET_DIR:-/run/sendspin-cli/socket}"
+readonly SENDSPIN_CONTROL_SOCKET="${SENDSPIN_SOCKET_DIR}/control.sock"
 readonly SENDSPIN_DAEMON_DECISION=/run/sendspin-cli/bundled-daemons
 readonly SYSTEM_BUS_DIR=/var/run/dbus
 readonly SYSTEM_BUS_SOCKET=/var/run/dbus/system_bus_socket

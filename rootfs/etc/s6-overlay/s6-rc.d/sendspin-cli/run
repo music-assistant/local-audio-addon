@@ -28,7 +28,7 @@ if [ "${decision}" = 'yes' ]; then
     sendspin::wait_for_socket "${AVAHI_SOCKET}"
 fi
 
-mkdir -p "${SENDSPIN_STATE_DIR}" "${SENDSPIN_RUN_DIR}"
+mkdir -p "${SENDSPIN_STATE_DIR}" "${SENDSPIN_RUN_DIR}" "${SENDSPIN_SOCKET_DIR}"
 
 # Created ahead of the write because a server value can carry credentials, and
 # the file is something a support thread will ask a user to paste.

@@ -177,6 +177,13 @@ COPY --from=build /stage/usr/local/bin/sendspin-cli /usr/bin/sendspin-cli
 COPY --from=build /build-info.txt /usr/share/sendspin-cli/BUILD-INFO.txt
 COPY rootfs/ /
 
+# The rendered configuration goes to /run/sendspin-cli and the control socket to its subdirectory socket, which
+# is the one a host directory is mounted over. Both are writable for everyone: with the mount, Docker would create
+# the parent owned by root, and without it the subdirectory would be, so a player that runs as a regular user could
+# neither write its configuration nor create its socket.
+RUN mkdir -p /run/sendspin-cli/socket \
+    && chmod 0777 /run/sendspin-cli /run/sendspin-cli/socket
+
 # No ENTRYPOINT or CMD: the base image's /init runs s6, which starts the
 # services in rootfs/etc/s6-overlay.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \

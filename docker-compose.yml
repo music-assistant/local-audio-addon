@@ -8,10 +8,10 @@ services:
     image: "${LOCAL_AUDIO_IMAGE:-ghcr.io/music-assistant/local-audio-addon}:${LOCAL_AUDIO_IMAGE_TAG:-latest}"
     entrypoint: []
     user: "0:0"
-    command: "chown -R ${LOCAL_AUDIO_USER_ID:-1000}:${LOCAL_AUDIO_USER_GROUP:-1000} /data /run/sendspin-cli"
+    command: "chown -R ${LOCAL_AUDIO_USER_ID:-1000}:${LOCAL_AUDIO_USER_GROUP:-1000} /data ${SENDSPIN_SOCKET_DIR:-/run/sendspin-cli/socket}"
     volumes:
       - data:/data
-      - ${LOCAL_AUDIO_CONTROL_DIR:-/run/sendspin-cli}:/run/sendspin-cli
+      - ${LOCAL_AUDIO_SOCKET_DIR:-/run/sendspin-cli/socket}:${SENDSPIN_SOCKET_DIR:-/run/sendspin-cli/socket}
     restart: "no"
 
   # Music Assistant Local Audio (Sendspin player)
@@ -47,10 +47,11 @@ services:
     volumes:
       # Identity, pairings and state
       - data:/data
-      # Rendered configuration and control socket of the player. In the container the image always uses
-      # /run/sendspin-cli; the directory on the host is LOCAL_AUDIO_CONTROL_DIR, as control.sock. The directory is
-      # mounted, so that the socket is created again when the container restarts.
-      - ${LOCAL_AUDIO_CONTROL_DIR:-/run/sendspin-cli}:/run/sendspin-cli
+      # Control socket of the player, as control.sock. The directory on the host is LOCAL_AUDIO_SOCKET_DIR, in the
+      # container it is SENDSPIN_SOCKET_DIR, where the player creates the socket. Only this directory is shared, the
+      # rendered configuration stays in the container. The directory is mounted, so that the socket is created again
+      # when the container restarts.
+      - ${LOCAL_AUDIO_SOCKET_DIR:-/run/sendspin-cli/socket}:${SENDSPIN_SOCKET_DIR:-/run/sendspin-cli/socket}
       # Time and zone
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -65,10 +66,9 @@ services:
     # with the network of the host the hostname in the container is the one of the host. Then the entrypoint of the
     # image (/init, s6-overlay) takes over. The $$ is Compose escaping, the shell sees a single $.
     entrypoint: ["/bin/sh", "-c", 'export SENDSPIN_NAME="$${SENDSPIN_NAME:-$$(hostname)}"; exec /init']
-    # Health check for process. It runs in the container, where the image always keeps the control socket at
-    # /run/sendspin-cli/control.sock, whatever LOCAL_AUDIO_CONTROL_DIR is on the host.
+    # Health check for process. It asks the player over its control socket in SENDSPIN_SOCKET_DIR, the path in the container.
     healthcheck:
-      test: ["CMD", "sendspin-cli", "status", "--control-socket", "/run/sendspin-cli/control.sock"]
+      test: ["CMD", "sendspin-cli", "status", "--control-socket", "${SENDSPIN_SOCKET_DIR:-/run/sendspin-cli/socket}/control.sock"]
       interval: 30s
       timeout: 10s
       retries: 3

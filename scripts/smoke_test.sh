@@ -582,7 +582,7 @@ pairing_token_of() {
     local waited=0 token
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
         if token=$(docker exec "$container" \
-            sendspin-cli pair-token --control-socket /run/sendspin-cli/control.sock 2>/dev/null); then
+            sendspin-cli pair-token --control-socket /run/sendspin-cli/socket/control.sock 2>/dev/null); then
             printf '%s\n' "$token"
             return 0
         fi
@@ -598,7 +598,7 @@ client_id_of() {
     local waited=0 out
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
         if out=$(docker exec "$container" \
-            sendspin-cli status --control-socket /run/sendspin-cli/control.sock 2>/dev/null); then
+            sendspin-cli status --control-socket /run/sendspin-cli/socket/control.sock 2>/dev/null); then
             sed -n 's/^client id: //p' <<<"$out"
             return 0
         fi
@@ -630,7 +630,7 @@ assert_token_kept_private() {
     fi
     pass 'the pairing token is in the log no more than upstream says it once'
 
-    # -D skip, for the control socket that sits beside the rendered config.
+    # -D skip, for the control socket that sits below the rendered config.
     files=$(docker exec "$container" grep -r -l -D skip -F -e "$token" /data /run/sendspin-cli || true)
     if [ -n "$files" ]; then
         fail "the pairing token was written to $(tr '\n' ' ' <<<"$files")"
@@ -1112,7 +1112,7 @@ check_advertise_mode() {
 
     status_out="$WORK_DIR/${container}.status"
     docker exec "$container" \
-        sendspin-cli status --control-socket /run/sendspin-cli/control.sock >"$status_out" 2>&1 ||
+        sendspin-cli status --control-socket /run/sendspin-cli/socket/control.sock >"$status_out" 2>&1 ||
         fail "sendspin-cli status exited $? -- $(cat "$status_out")"
     if ! grep -F -e 'output: null' "$status_out" >/dev/null; then
         cat "$status_out" >&2
@@ -2111,7 +2111,7 @@ check_identity_survives_recreation() {
 
     while [ "$waited" -lt "$((BOOT_TIMEOUT_S * 10))" ]; do
         status_out=$(docker exec "$PLAYER" \
-            sendspin-cli status --control-socket /run/sendspin-cli/control.sock 2>/dev/null || true)
+            sendspin-cli status --control-socket /run/sendspin-cli/socket/control.sock 2>/dev/null || true)
         if grep -F -x -e 'trust: paired' <<<"$status_out" >/dev/null; then
             break
         fi

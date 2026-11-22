@@ -25,18 +25,18 @@ host_network: true
 # gives this app its own Audio selector, which is how a user points it at a USB
 # DAC.
 audio: true
-# The config folder of this app, mapped over /run/sendspin-cli, where the player keeps its
-# control socket (control.sock) and the configuration it is started with. The socket is then in
-# the folder of this app on the host instead of in the container alone, and an app that maps
-# `all_app_configs` can reach it. The path in the container is the one the image always uses,
-# so nothing in the image changes. Writable because the player creates the socket in it. The
-# folder holds the rendered `sendspin-cli.conf` (mode 0600) too, which can carry the credentials
-# of a `server`. `app_config` is the name since add-ons became apps; older Supervisors know it as
-# `addon_config`.
+# The config folder of this app, mapped over /run/sendspin-cli/socket, where the player keeps its
+# control socket (control.sock). The socket is then in the folder of this app on the host instead
+# of in the container alone, and an app that maps `all_app_configs` can reach it. The path in the
+# container is the one the image always uses, so nothing in the image changes. Writable because
+# the player creates the socket in it. Only the socket directory is shared: the rendered
+# `sendspin-cli.conf` (mode 0600), which can carry the credentials of a `server`, stays in
+# /run/sendspin-cli of the container. `app_config` is the name since add-ons became apps; older
+# Supervisors know it as `addon_config`.
 map:
   - type: app_config
     read_only: false
-    path: /run/sendspin-cli
+    path: /run/sendspin-cli/socket
 options:
   # Empty rather than absent, so the configuration screen shows the field
   # instead of folding it away as unused. An empty name is the default,

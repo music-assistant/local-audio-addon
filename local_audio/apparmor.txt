@@ -64,8 +64,8 @@ profile local_audio flags=(attach_disconnected,mediate_deleted) {
   network unix stream,
   network unix dgram,
 
-  # /run/sendspin-cli holds the rendered config, the control socket and the
-  # recorded daemon decision; /data is the add-on's persistent volume; s6
+  # /run/sendspin-cli holds the rendered config and the recorded daemon decision,
+  # its subdirectory socket the control socket; /data is the add-on's persistent volume; s6
   # writes and locks the rest of /run.
   /run/sendspin-cli/** rw,
   /data/** rw,
